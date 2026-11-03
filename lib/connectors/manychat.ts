@@ -1,5 +1,5 @@
-import { GATED, connected as gatedConnected } from '@/lib/connectors/demo-status';
 import type { ConnectorStatus } from '@/lib/connectors/types';
+import { runtimeEnv } from '@/lib/creds';
 
 // ManyChat (Instagram DM automation). Real-ready: honest `not_configured` until
 // a key lands, live account handle once it does. One GET to /fb/page/getInfo per
@@ -11,32 +11,7 @@ import type { ConnectorStatus } from '@/lib/connectors/types';
 // manychat), not by polling this connector.
 
 const MANYCHAT_API = 'https://api.manychat.com';
-/**
- * ManyChat blocks EVERY request for 24 hours once the daily cap is hit, so this
- * status check is deliberately the slowest-refreshing connector in the OS. It
- * is called from the connections board, meaning page views hit it as well as
- * the 15-minute sweep; the cap therefore lives here rather than in the caller,
- * where no amount of refreshing can defeat it. Design choice: everything else
- * refreshes every 15 minutes, ManyChat every 3 hours.
- */
-export const MANYCHAT_STATUS_TTL_MS = 3 * 60 * 60 * 1000;
-const TTL_MS = MANYCHAT_STATUS_TTL_MS;
-
-/**
- * 6000ms was the budget until, when the host's board reported
- * "Key set but API check failed: The operation was aborted due to timeout"
- * against a key that answered getInfo fine in the same minute. Same shape as
- * the Attio timeout: the tightest clock in lib/connectors, probed
- * from a box running agents back to back, reporting a slow answer as a broken
- * key. 8s matches paperclip, docusign, payments and Attio.
- */
-export const MANYCHAT_TIMEOUT_MS = 8000;
-
-/** A timeout or a dropped socket, as opposed to an answer we did not like. */
-function isTransient(err: unknown): boolean {
-  const name = err instanceof Error ? err.name : '';
-  return name === 'TimeoutError' || name === 'AbortError' || err instanceof TypeError;
-}
+const TTL_MS = 60_000;
 
 export type ManyChatPageInfo = { name: string; username: string | null; isPro: boolean };
 
@@ -58,7 +33,7 @@ export type ManyChatSendResult = { ok: boolean; detail: string };
 export async function sendManyChatText(
   subscriberId: string,
   text: string,
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = runtimeEnv(),
   doFetch: typeof fetch = fetch,
 ): Promise<ManyChatSendResult> {
   const key = env.MANYCHAT_API_KEY;
@@ -72,9 +47,7 @@ export async function sendManyChatText(
         data: { version: 'v2', content: { type: 'instagram', messages: [{ type: 'text', text }] } },
         message_tag: 'ACCOUNT_UPDATE',
       }),
-      // Same budget as the status probe, but this one is never retried: a
-      // resent sendContent is a second DM in someone's inbox.
-      signal: AbortSignal.timeout(MANYCHAT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(6000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return { ok: true, detail: 'sent' };
@@ -88,10 +61,9 @@ let cache: { at: number; key: string; state: ConnectorStatus['state']; detail: s
 const base = { id: 'manychat', name: 'ManyChat (IG DMs)', kind: 'social' as const };
 
 export async function manychatStatus(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = runtimeEnv(),
   doFetch: typeof fetch = fetch,
 ): Promise<ConnectorStatus> {
-  if (GATED) return gatedConnected('manychat', 'ManyChat', 'social', 'IG DM automation · 130 flows');
   const key = env.MANYCHAT_API_KEY;
   if (!key) {
     return {
@@ -105,25 +77,10 @@ export async function manychatStatus(
     return { ...base, state: cache.state, detail: cache.detail };
   }
   try {
-    // One retry, on a transient failure only. An HTTP status is an answer: a
-    // 429 will still be a 429 the second time, and retrying it is exactly how
-    // a connector walks an account into the 24-hour block. Worst case is two
-    // requests per 3-hour window, still far under any page-view rate.
-    let res: Response | undefined;
-    let last: unknown;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        res = await doFetch(`${MANYCHAT_API}/fb/page/getInfo`, {
-          headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
-          signal: AbortSignal.timeout(MANYCHAT_TIMEOUT_MS),
-        });
-        break;
-      } catch (err) {
-        last = err;
-        if (!isTransient(err)) throw err;
-      }
-    }
-    if (!res) throw last;
+    const res = await doFetch(`${MANYCHAT_API}/fb/page/getInfo`, {
+      headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(6000),
+    });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const page = parseManyChatPageInfo(await res.json());
     if (!page) throw new Error('no account info in response');

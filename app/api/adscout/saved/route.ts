@@ -6,7 +6,7 @@ import type { WallAd } from '@/lib/foreplay/wall';
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-/** Saved ads: the swipe file. GET lists, POST saves a WallAd snapshot,
+/** Saved ads — the swipe file. GET lists, POST saves a WallAd snapshot,
  *  DELETE unsaves by ad id. */
 
 export async function GET() {

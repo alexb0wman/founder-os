@@ -1,8 +1,8 @@
 'use client';
 
-import { ChevronLeft, ChevronRight, ClipboardList, UserRound, Wrench, type LucideIcon } from 'lucide-react';
-import { VantageMark } from '@/components/VantageMark';
+import { ChevronLeft, ChevronRight, ClipboardList, User, UserRound, Wrench, type LucideIcon } from 'lucide-react';
 import type { DirectoryGroup } from '@/lib/knowledge-graph';
+import { useGc } from '@/components/system-g/style-context';
 
 /**
  * The everything-index of the knowledge graph: every AI agent, human, SOP and
@@ -14,7 +14,7 @@ import type { DirectoryGroup } from '@/lib/knowledge-graph';
  */
 
 const GROUP_ICON: Record<DirectoryGroup['kind'], LucideIcon> = {
-  employee: VantageMark,
+  employee: User,
   person: UserRound,
   task: ClipboardList,
   tool: Wrench,
@@ -28,7 +28,7 @@ const GROUP_COLOR: Record<DirectoryGroup['kind'], string> = {
 };
 
 export function GraphDirectory({
-  groups, onPick, onHover, collapsed = false, onToggleCollapse, onShowAllPillars, className = '',
+  groups, onPick, onHover, collapsed = false, onToggleCollapse, className = '',
 }: {
   groups: DirectoryGroup[];
   /** kind + row id (node id; tools pass their slug) */
@@ -38,10 +38,9 @@ export function GraphDirectory({
   collapsed?: boolean;
   /** wired = the header shows a collapse chevron and the rail is clickable */
   onToggleCollapse?: () => void;
-  /** wired = the empty state offers a way back when every pillar chip is off */
-  onShowAllPillars?: () => void;
   className?: string;
 }) {
+  const gc = useGc();
   // collapsed → a slim vertical rail hugging the edge; click brings it back
   if (collapsed) {
     return (
@@ -50,10 +49,10 @@ export function GraphDirectory({
         onClick={onToggleCollapse}
         title="Show directory"
         aria-label="Show directory"
-        className={`pressable group flex w-9 shrink-0 flex-col items-center gap-3 rounded-sm-t border border-os-border-strong bg-os-bg/95 py-3 backdrop-blur hover:border-os-dim ${className}`}
+        className={gc(`g-btn kg-dir-rail ${className}`, `group flex w-9 shrink-0 flex-col items-center gap-4 rounded-sm-t border border-os-border-strong bg-os-bg/95 py-3 backdrop-blur transition-colors hover:border-os-dim ${className}`)}
       >
-        <ChevronLeft className="h-4 w-4 lens-child text-os-dim group-hover:text-os-text" />
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-os-dim [writing-mode:vertical-rl] group-hover:text-os-muted">
+        <ChevronLeft className="h-4 w-4 text-os-dim transition-colors group-hover:text-os-text" strokeWidth={1.6} />
+        <span className="text-[12px] text-os-dim [writing-mode:vertical-rl] group-hover:text-os-muted">
           Directory
         </span>
       </button>
@@ -61,54 +60,35 @@ export function GraphDirectory({
   }
   return (
     <div
-      className={`flex flex-col overflow-hidden rounded-sm-t border border-os-border-strong bg-os-bg/95 backdrop-blur ${className}`}
+      className={gc(`kg-dir flex flex-col overflow-hidden ${className}`, `flex flex-col overflow-hidden rounded-sm-t border border-os-border-strong bg-os-bg/95 backdrop-blur ${className}`)}
     >
-      <div className="flex items-center justify-between border-b border-os-border px-3 py-2">
-        <span className="font-mono text-[10px] uppercase tracking-[0.16em] text-os-dim">Directory</span>
+      <div className="flex items-center justify-between border-b border-os-border px-3 py-3">
+        <span className="text-[12.5px] font-medium text-os-muted">Directory</span>
         {onToggleCollapse && (
           <button
             type="button"
             onClick={onToggleCollapse}
             title="Hide directory"
             aria-label="Hide directory"
-            className="pressable -mr-1 rounded-sm-t p-0.5 text-os-dim hover:text-os-text"
+            className={gc('g-btn g-btn-icon g-btn-sm', '-mr-1 rounded-sm-t p-0.5 text-os-dim transition-colors hover:text-os-text')}
           >
             <ChevronRight className="h-4 w-4" />
           </button>
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-1.5 pb-2">
-        {groups.every((g) => g.rows.length === 0) && (
-          <div className="px-2 py-6 text-center">
-            <p className="font-mono text-[11px] text-os-muted">No pillars selected.</p>
-            {onShowAllPillars && (
-              <>
-                <p className="mt-1 font-mono text-[10px] text-os-dim">turn a filter back on, or</p>
-                <button
-                  type="button"
-                  onClick={onShowAllPillars}
-                  data-lens="c"
-                  className="pressable is-dark mt-2 inline-flex h-6 items-center rounded-ctl border border-os-border bg-os-bg px-2.5 font-mono text-[10px] font-semibold text-os-muted"
-                >
-                  show all pillars
-                </button>
-              </>
-            )}
-          </div>
-        )}
         {groups.map((g, gi) => {
           const Icon = GROUP_ICON[g.kind];
           const color = GROUP_COLOR[g.kind];
-          if (g.rows.length === 0) return null;
           return (
-            <div key={g.kind} className={gi > 0 ? 'mt-2 border-t border-os-border pt-0.5' : undefined}>
+            <div key={g.kind} className={gi > 0 ? 'mt-3 border-t border-os-border pt-0.5' : undefined}>
               {/* segment title carries the kind's COLOR; SOLID background so the
                   scrolling rows never bleed through and the label stays legible */}
               <div
-                className="sticky top-0 z-10 flex items-center gap-2 bg-os-bg px-2 pb-1.5 pt-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.12em]"
-                style={{ color }}
+                className={gc('kg-dir-head sticky top-0 z-10 flex items-center gap-3 px-2 pb-1.5 pt-2.5 text-[12.5px]', 'sticky top-0 z-10 flex items-center gap-3 bg-os-bg px-2 pb-1.5 pt-2.5 text-[12.5px] font-medium')}
+                style={{ color: `var(--kg-dir-ink-${g.kind}, ${color})` }}
               >
-                <Icon className="h-3.5 w-3.5" strokeWidth={2} />
+                <Icon className="h-3.5 w-3.5" strokeWidth={1.7} />
                 <span className="flex-1">{g.title}</span>
                 <span className="text-os-dim">{g.rows.length}</span>
               </div>
@@ -118,8 +98,7 @@ export function GraphDirectory({
                   onClick={() => onPick(g.kind, r.id)}
                   onMouseEnter={() => onHover?.(g.kind, r.id)}
                   onMouseLeave={() => onHover?.(g.kind, null)}
-                  data-lens="r"
-                  className="pressable is-row group relative flex w-full items-center gap-2 rounded-sm-t py-1.5 pl-3 pr-2 text-left hover:bg-os-surface2"
+                  className={gc('g-btn kg-dir-row', 'group relative flex w-full items-baseline gap-3 rounded-sm-t py-2.5 pl-3 pr-2 text-left transition-colors hover:bg-os-surface2')}
                   title={`Show ${r.label} on the graph`}
                 >
                   {/* colored left accent in the group's color makes the hovered
@@ -129,11 +108,10 @@ export function GraphDirectory({
                     className="absolute inset-y-0 left-0 w-[3px] opacity-0 transition-opacity group-hover:opacity-100"
                     style={{ background: color }}
                   />
-                  <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: color }} />
-                  <span className="min-w-0 flex-1 truncate text-[13px] leading-snug text-os-text group-hover:text-white">
+                  <span className="min-w-0 flex-1 truncate text-[14px] leading-snug text-os-text">
                     {r.label}
                   </span>
-                  <span className="shrink-0 font-mono text-[10px] text-os-dim group-hover:text-os-muted">{r.sub}</span>
+                  <span className="shrink-0 text-[11.5px] text-os-dim group-hover:text-os-muted">{r.sub}</span>
                 </button>
               ))}
             </div>

@@ -1,5 +1,6 @@
 'use client';
 
+import { useGc } from '@/components/system-g/style-context';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Search } from 'lucide-react';
 import { KIND_LABEL, searchHierarchy, type HierarchyIndex, type HKind } from '@/lib/blueprint/hierarchy';
@@ -28,6 +29,7 @@ export function HierarchySearch({
   onQuery: (q: string) => void;
   onPick: (id: string) => void;
 }) {
+  const gc = useGc();
   const inputRef = useRef<HTMLInputElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const [cursor, setCursor] = useState(0);
@@ -71,7 +73,7 @@ export function HierarchySearch({
 
   return (
     <div ref={rootRef} className={`bh-search ${open ? 'is-open' : ''}`}>
-      <button type="button" className="pressable bh-search-pill" onClick={onOpen}>
+      <button type="button" className={gc('bh-search-pill g-btn', 'bh-search-pill')} onClick={onOpen}>
         <Search />
         <span>Search the system</span>
         <kbd>⌘K</kbd>
@@ -79,7 +81,7 @@ export function HierarchySearch({
       <div className="bh-search-panel" aria-hidden={!open}>
         <div className="bh-search-row">
           <Search />
-          <input ref={inputRef} type="text" value={query} placeholder="Agents, connectors, skills, daemons, stores, pages, models…" autoComplete="off" spellCheck={false} onChange={(e) => onQuery(e.target.value)} onKeyDown={onKey} />
+          <input ref={inputRef} type="text" className={gc('g-input kg-bp-search-input', '') || undefined} aria-label="Search the system" value={query} placeholder="Agents, connectors, skills, daemons, stores, pages, models…" autoComplete="off" spellCheck={false} onChange={(e) => onQuery(e.target.value)} onKeyDown={onKey} />
           <kbd>esc</kbd>
         </div>
         <div className="bh-search-results">

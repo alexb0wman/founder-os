@@ -1,5 +1,6 @@
 'use client';
 
+import { useGc, useGStyle } from '@/components/system-g/style-context';
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Layers, Maximize2, Minimize2, Play, Scan } from 'lucide-react';
 import type { BlueprintGraph } from '@/lib/blueprint/graph';
@@ -27,6 +28,8 @@ const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * ask bar, and "trace the chain" which runs a flare down the command spine.
  */
 export function HierarchyWorkspace({ graph, subline }: { graph: BlueprintGraph; subline: string }) {
+  const gc = useGc();
+  const g = useGStyle();
   const h = useMemo(() => buildHierarchy(graph), [graph]);
   const idx = useMemo(() => indexHierarchy(h), [h]);
 
@@ -205,7 +208,7 @@ export function HierarchyWorkspace({ graph, subline }: { graph: BlueprintGraph; 
         </div>
         <div className="bh-levels">
           {LEVELS.map(({ n, label, Icon }) => (
-            <button key={n} type="button" className={`pressable bh-lvl ${level === n ? 'is-on' : ''}`} onClick={() => setLevel(n)}>
+            <button key={n} type="button" className={gc(`bh-lvl g-chip ${level === n ? 'is-on' : ''}`, `bh-lvl ${level === n ? 'is-on' : ''}`)} aria-pressed={g ? level === n : undefined} onClick={() => setLevel(n)}>
               <Icon />
               <span>{label}</span>
             </button>
@@ -227,11 +230,11 @@ export function HierarchyWorkspace({ graph, subline }: { graph: BlueprintGraph; 
           }}
         />
         <div className="bh-actions">
-          <button type="button" className="pressable bh-btn" onClick={() => canvas.current?.fitAll()}>
+          <button type="button" className={gc('g-btn g-btn-sm', 'bh-btn')} onClick={() => canvas.current?.fitAll()}>
             <Scan />
             <span>Fit</span>
           </button>
-          <button type="button" className={`pressable bh-btn bh-btn-primary ${tracing ? 'is-busy' : ''}`} onClick={() => void trace()}>
+          <button type="button" className={gc(`g-btn g-btn-sm g-btn-ink ${tracing ? 'is-busy' : ''}`, `bh-btn bh-btn-primary ${tracing ? 'is-busy' : ''}`)} aria-busy={g ? tracing || undefined : undefined} onClick={() => void trace()}>
             <Play />
             <span>Trace the chain</span>
           </button>
@@ -243,7 +246,8 @@ export function HierarchyWorkspace({ graph, subline }: { graph: BlueprintGraph; 
           <button
             key={k}
             type="button"
-            className={`pressable bh-kind ${kindFilter === k ? 'is-on' : ''}`}
+            className={gc(`bh-kind g-chip ${kindFilter === k ? 'is-on' : ''}`, `bh-kind ${kindFilter === k ? 'is-on' : ''}`)}
+            aria-pressed={g ? kindFilter === k : undefined}
             style={{ '--c': `var(--bh-k-${k})` } as CSSProperties}
             onClick={() => {
               const next = kindFilter === k ? null : k;

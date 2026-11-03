@@ -1,7 +1,7 @@
 import type { Hierarchy, HierarchyIndex, HItem, HContainer, HAny, HShape, HRelationHit } from './hierarchy';
 
 /**
- * Layout + routing for the Blueprint hierarchy. Pure geometry: no DOM: so
+ * Layout + routing for the Blueprint hierarchy. Pure geometry — no DOM — so
  * the canvas is a thin renderer and the guarantees (no overlapping cards, no
  * trace through a card) are unit-tested. World space is a 24px grid; every
  * container sits centred on one spine x.
@@ -203,7 +203,7 @@ export function roundedPath(pts: Pt[], r = 14): string {
   return d + ` L ${pts[pts.length - 1].x} ${pts[pts.length - 1].y}`;
 }
 
-/** Midpoint along the longest horizontal segment: where a pill reads best. */
+/** Midpoint along the longest horizontal segment — where a pill reads best. */
 export function midOf(pts: Pt[]): Pt {
   let best: Pt | null = null;
   let bl = -1;
@@ -271,7 +271,7 @@ export class Router {
   }
 
   /** orthogonal route that never crosses a card: straight, side-to-side, over the row,
-   *  through a frame gap, or down a gutter: the first clear candidate wins */
+   *  through a frame gap, or down a gutter — the first clear candidate wins */
   route(a: Box, b: Box, gutter?: 'left' | 'right'): Pt[] {
     const overlapY = a.y < b.y + b.h && b.y < a.y + a.h;
     if (!gutter && overlapY) {
@@ -428,7 +428,7 @@ export function fitAllCam(layout: Layout, w: number, hgt: number): Cam {
   return { s, x: (w - b.w * s) / 2 - b.x * s, y: (hgt - b.h * s) / 2 - b.y * s };
 }
 
-/** first view: fit the width, anchor the top: the operator and the OS read at a glance */
+/** first view: fit the width, anchor the top — the operator and the OS read at a glance */
 export function fitTopCam(layout: Layout, w: number): Cam {
   const b = layout.bounds;
   const s = Math.min((w - 40) / b.w, 0.9);

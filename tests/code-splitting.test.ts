@@ -12,19 +12,26 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8');
  * they are intentionally left eager.)
  */
 describe('code-splitting the heavy graphs', () => {
-  test('BrainGraphView loads KnowledgeGraph and NeuralGraph lazily, client-only', () => {
+  test('BrainGraphView loads KnowledgeGraph lazily, client-only', () => {
     const src = read('components/BrainGraphView.tsx');
     expect(src).toMatch(/dynamic\(\s*\(\)\s*=>\s*import\('@\/components\/KnowledgeGraph'\)/);
-    expect(src).toMatch(/dynamic\(\s*\(\)\s*=>\s*import\('@\/components\/NeuralGraph'\)/);
-    const ssrFalse = src.match(/ssr:\s*false/g) ?? [];
-    expect(ssrFalse.length).toBeGreaterThanOrEqual(2);
-    // dimension-matched skeletons: the wheel canvas is 680px tall, the neural
-    // canvas keeps its 1200/640 viewBox aspect
+    expect(src).toMatch(/ssr:\s*false/);
+    // dimension-matched skeleton: the wheel canvas is 680px tall
     expect(src).toContain('h-[680px]');
-    expect(src).toContain('1200 / 640');
-    // no eager imports remain
+    // no eager import remains
     expect(src).not.toMatch(/import \{ KnowledgeGraph \}/);
-    expect(src).not.toMatch(/import \{ NeuralGraph \}/);
+  });
+
+  test('the Neural view is cut and archived (GladOS UI H34, AC05.5)', () => {
+    const src = read('components/BrainGraphView.tsx');
+    // no Neural control and no import of the archived engine
+    expect(src).not.toMatch(/label: 'Neural'|NeuralGraph'\)/);
+    expect(src).not.toMatch(/aria-pressed/);
+    expect(existsSync(join(process.cwd(), 'components/NeuralGraph.tsx'))).toBe(false);
+    expect(existsSync(join(process.cwd(), 'lib/neural-layout.ts'))).toBe(false);
+    for (const f of ['NeuralGraph.tsx', 'NeuralDetail.tsx', 'neural-layout.ts', 'README.md']) {
+      expect(existsSync(join(process.cwd(), 'archive/neural-graph', f)), f).toBe(true);
+    }
   });
 
   test('the social page pulls AudienceConsistency through a lazy client wrapper', () => {
@@ -39,25 +46,11 @@ describe('code-splitting the heavy graphs', () => {
     expect(page).not.toMatch(/from '@\/components\/AudienceConsistency';/);
   });
 
-  test('the funnel page pulls both graph engines through a lazy client wrapper', () => {
-    expect(existsSync(join(process.cwd(), 'components/FunnelGraphsLazy.tsx'))).toBe(true);
-    const lazy = read('components/FunnelGraphsLazy.tsx');
-    expect(lazy).toContain("'use client'");
-    expect(lazy).toMatch(/dynamic\(\s*\(\)\s*=>\s*import\('@\/components\/FunnelRadial'\)/);
-    expect(lazy).toMatch(/dynamic\(\s*\(\)\s*=>\s*import\('@\/components\/FunnelSpace'\)/);
-    const ssrFalse = lazy.match(/ssr:\s*false/g) ?? [];
-    expect(ssrFalse.length).toBeGreaterThanOrEqual(2);
-    // aspect-matched skeletons: radial svg is 1100/680, the orbit space 1100/460
-    expect(lazy).toContain('1100 / 680');
-    expect(lazy).toContain('1100 / 460');
+  test('the funnel page carries no heavy board: the retired visualizations stay gone', () => {
     const page = read('app/funnel/page.tsx');
-    expect(page).toContain('FunnelRadialLazy');
-    expect(page).toContain('FunnelSpaceLazy');
-    expect(page).not.toMatch(/from '@\/components\/FunnelRadial';/);
-    expect(page).not.toMatch(/from '@\/components\/FunnelSpace';/);
-    // retired engines stay retired (2026-07-21 reverts)
-    expect(page).not.toMatch(/FunnelNeural/);
-    expect(existsSync(join(process.cwd(), 'components/FunnelNeural.tsx'))).toBe(false);
-    expect(existsSync(join(process.cwd(), 'components/FunnelFlow.tsx'))).toBe(false);
+    expect(page).not.toMatch(/FunnelNeural|FunnelRadialLazy|FunnelSpaceLazy|FunnelBoardLazy|FunnelJourneyBoard/);
+    for (const f of ['FunnelNeural', 'FunnelRadial', 'FunnelSpace', 'FunnelJourneyBoard', 'FunnelBoardLazy', 'FunnelNodeCard']) {
+      expect(existsSync(join(process.cwd(), `components/${f}.tsx`))).toBe(false);
+    }
   });
 });

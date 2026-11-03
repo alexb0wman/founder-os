@@ -4,7 +4,7 @@
  * Per-agent profile photo with a generic fallback. Pages resolve `src` from
  * lib/agent-avatars (a manifest of public/agents/<agent-id>.jpg|png), so an
  * agent without a photo renders the generic stroke icon with zero network
- * probing: the console stays clean. Never an emoji, never a fake face.
+ * probing — the console stays clean. Never an emoji, never a fake face.
  */
 
 import { useState } from 'react';
@@ -16,6 +16,7 @@ export function AgentAvatar({ src, name, size = 24 }: { src: string | null; name
   if (!src || failed) {
     return (
       <span
+        data-agent-avatar=""
         className="grid shrink-0 place-items-center rounded-full border border-os-border bg-os-surface text-os-dim"
         style={{ width: size, height: size }}
         aria-hidden="true"
@@ -25,7 +26,7 @@ export function AgentAvatar({ src, name, size = 24 }: { src: string | null; name
     );
   }
   return (
-    // Plain <img>: tiny fixed-size avatars with an onError fallback: nothing
+    // Plain <img>: tiny fixed-size avatars with an onError fallback — nothing
     // for next/image to optimize here.
     // eslint-disable-next-line @next/next/no-img-element
     <img
@@ -33,6 +34,7 @@ export function AgentAvatar({ src, name, size = 24 }: { src: string | null; name
       alt={name ? `${name} avatar` : ''}
       width={size}
       height={size}
+      data-agent-avatar=""
       className="shrink-0 rounded-full border border-os-border object-cover"
       style={{ width: size, height: size }}
       onError={() => setFailed(true)}

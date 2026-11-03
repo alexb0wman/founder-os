@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/data';
+import { AGGREGATE_SERIES } from '@/lib/series';
 import {
   audienceSeries,
   dmSeries,
   syncFromZernioConfig,
-  DM_COLOR,
   GROWTH_RANGES,
 } from '@/lib/social';
 
@@ -14,7 +14,9 @@ export const dynamic = 'force-dynamic';
  * Labelled history series for the Social pop-out charts.
  *   ?metric=audience → per-channel + "All audience" follower/subscriber series
  *   ?metric=dms      → total DMs-over-time
- * Growth per range is derived client-side from these points.
+ * Growth per range is derived client-side from these points. Each series
+ * carries a series index (lib/series.ts), never a colour: the client maps it
+ * to the --series-<n> token.
  */
 export async function GET(request: Request) {
   const metric = new URL(request.url).searchParams.get('metric');
@@ -30,7 +32,7 @@ export async function GET(request: Request) {
     return NextResponse.json({
       metric,
       ranges: GROWTH_RANGES,
-      series: [{ key: 'total', label: 'Total DMs', color: DM_COLOR, points: dmSeries(db) }],
+      series: [{ key: 'total', label: 'Total DMs', series: AGGREGATE_SERIES, points: dmSeries(db) }],
     });
   }
 

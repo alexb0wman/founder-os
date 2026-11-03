@@ -1,198 +1,236 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createElement } from 'react';
 import { describe, expect, test } from 'vitest';
+import { renderWithRouter } from './helpers/render-client';
+import { G_READY, G_TREE_FILES } from '@/lib/g-ready';
+import { NAV_ITEMS } from '@/lib/nav';
+import { sampleTrading } from '@/lib/fo-sample';
+import { buildView, type TradingPayload } from '@/lib/trading-view';
+import { checkLimit, parseLog, signedUsd, totalHistory, tradingModel, usdCompact } from '@/lib/trading-model';
+import { TradingG } from '@/components/trading/TradingG';
+import { TradingClassic } from '@/components/trading/TradingClassic';
+import type { ConnectorStatus } from '@/lib/connectors/types';
+import type { TradingAccountSnapshot } from '@/lib/schemas';
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8');
+const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+const NOW = new Date('2026-10-12T15:00:00Z');
+const status = (id: string, state: ConnectorStatus['state'], detail = ''): ConnectorStatus => ({ id, name: id, kind: 'payments', state, detail });
+const setup = { robinhood: '/integrations#robinhood', phantom: '/integrations#phantom' };
 
-/**
- * /trading is one slab in the Brand Deals mould (Alex, 2026-09-18: "big and
- * boxy, kind of like the brand deals tab as a model"). The page stays a server
- * component that reads the same payload GET /api/trading serves and hands it
- * to a client board, which refreshes itself every 60s. Every layout call
- * Alex made on the old page survives here: both accounts side by side, the
- * agent's own value graph, the sleeve and the reasoning sharing one level row,
- * open orders naming agent vs you, honesty when nothing has traded.
- */
-describe('/trading page hands the shared payload to the slab', () => {
+/** A blank install: no feed, no wallet address. */
+function blank(): TradingPayload {
+  const accounts: TradingAccountSnapshot[] = [];
+  return {
+    accounts, history: {}, positions: [], activity: [], analysis: null, openOrders: [], limits: null,
+    status: status('robinhood', 'not_configured'), phantomStatus: status('phantom', 'not_configured'), phantom: null,
+    view: buildView({ accounts, positions: [], activity: [], phantom: null, now: NOW.getTime() }),
+    mode: 'live', sample: false, at: NOW.toISOString(),
+  };
+}
+
+/** The sample fixture as a live payload, optionally aged. */
+function live(ageH = 0, opts: { wallet?: 'ok' | 'error' | 'none'; limits?: boolean } = {}): TradingPayload {
+  const now = new Date(NOW.getTime() - ageH * 3600_000);
+  const s = sampleTrading(now);
+  const wallet = opts.wallet ?? 'ok';
+  const phantom = wallet === 'ok' ? s.phantom : null;
+  return {
+    ...s,
+    limits: opts.limits === false ? null : s.limits,
+    phantom,
+    status: status('robinhood', ageH >= 24 ? 'error' : 'connected'),
+    phantomStatus: wallet === 'none' ? status('phantom', 'not_configured') : wallet === 'error' ? status('phantom', 'error', 'RPC 503') : status('phantom', 'connected'),
+    view: buildView({ accounts: s.accounts, positions: s.positions, activity: s.activity, phantom, now: NOW.getTime() }),
+    mode: 'live', sample: false, at: NOW.toISOString(),
+  };
+}
+
+describe('trading model (pages/trading.md §3, §5)', () => {
+  test('blank install: unconfigured, no total, no subtitle numbers, no limits', () => {
+    const m = tradingModel(blank(), { brandName: 'GladOS' });
+    expect(m.unconfigured).toBe(true);
+    expect(m.totalUsd).toBeNull();
+    expect(m.subtitle).toBeNull();
+    expect(m.limits.saved).toBeNull();
+    expect(m.limits.savedLabel).toBe('No limits saved');
+    expect(m.limits.fields.every((f) => f.stored === null)).toBe(true);
+    expect(m.feedPill).toBeNull();
+  });
+
+  test('live: subtitle totals brokerage plus the wallet, feed pill ok', () => {
+    const m = tradingModel(live(), { brandName: 'GladOS' });
+    expect(m.unconfigured).toBe(false);
+    expect(m.subtitle).toMatch(/^\$13,225 across 3 accounts · updated 12 min ago$/);
+    expect(m.feedPill?.tone).toBe('ok');
+    expect(m.initialAcct).toBe('agentic');
+  });
+
+  test('stale (T-3): a capture over 24 h old is a warn pill with its age', () => {
+    const m = tradingModel(live(49), { brandName: 'GladOS' });
+    expect(m.feed).toBe('stale');
+    expect(m.feedPill).toMatchObject({ tone: 'warn', text: 'Feed 2 days old' });
+  });
+
+  test('partial: wallet unreachable keeps every other number and names the error', () => {
+    const m = tradingModel(live(0, { wallet: 'error' }), { brandName: 'GladOS' });
+    const w = m.accounts.find((a) => a.kind === 'wallet');
+    expect(w).toMatchObject({ valueUsd: null, note: 'Wallet not reachable', error: 'RPC 503' });
+    expect(m.totalUsd).toBe(12_730);
+  });
+
+  test('wallet only: not unconfigured; the feed still asks to connect', () => {
+    const p = blank();
+    p.phantomStatus = status('phantom', 'connected');
+    p.phantom = { address: 'x', sol: 2, usdPerSol: 100, usdValue: 200, fetchedAt: NOW.toISOString() };
+    const m = tradingModel(p, { brandName: 'GladOS' });
+    expect(m.unconfigured).toBe(false);
+    expect(m.feed).toBe('none');
+    expect(m.totalUsd).toBe(200);
+  });
+
+  test('?acct and ?log: honoured when valid, defaulted otherwise', () => {
+    expect(tradingModel(live(), { acct: 'individual' }).initialAcct).toBe('individual');
+    expect(tradingModel(live(), { acct: 'nope' }).initialAcct).toBe('agentic');
+    expect(parseLog('rejected')).toBe('rejected');
+    expect(parseLog('x')).toBe('all');
+  });
+
+  test('sample payloads are read only and badged', () => {
+    const p = live();
+    p.sample = true;
+    p.mode = 'sample';
+    const m = tradingModel(p);
+    expect(m.readOnly).toBe(true);
+    expect(m.fixture).toMatch(/sample/);
+  });
+
+  test('copy names the brand from BRAND, never a literal (AC-15)', () => {
+    const m = tradingModel(blank(), { brandName: 'FounderOS' });
+    expect(m.copy.subtitleEmpty).toContain('FounderOS never places an order');
+    expect(m.copy.autopilotBody).toContain('FounderOS does not place orders itself');
+  });
+
+  test('helpers: limits validation, signs, compact axis, carried total history', () => {
+    const f = { label: 'Max positions', min: 1, max: 500, integer: true };
+    expect(checkLimit(f, '')).toEqual({ value: null, error: 'Required' });
+    expect(checkLimit(f, '2.5').error).toBe('Whole number only');
+    expect(checkLimit(f, '0').error).toBe('At least 1');
+    expect(checkLimit(f, '6')).toEqual({ value: 6, error: null });
+    expect(checkLimit({ label: 'Budget', min: 1, max: 10_000_000, integer: false }, '$2,000').value).toBe(2000);
+    expect(signedUsd(-8.15)).toBe('−$8.15');
+    expect(signedUsd(142, false)).toBe('+$142');
+    expect(usdCompact(12_488)).toBe('$12.5k');
+    const h = totalHistory({
+      a: [{ capturedAt: '2026-10-01T00:00:00Z', accountId: 'a', accountValueUsd: 10 } as TradingAccountSnapshot],
+      b: [
+        { capturedAt: '2026-10-02T00:00:00Z', accountId: 'b', accountValueUsd: 5 } as TradingAccountSnapshot,
+        { capturedAt: '2026-10-03T00:00:00Z', accountId: 'b', accountValueUsd: 7 } as TradingAccountSnapshot,
+      ],
+    });
+    expect(h).toEqual([15, 17]); // no partial point before b first reports
+  });
+});
+
+describe('trading trees render every state', () => {
+  for (const [name, Tree] of [['GladOS', TradingG], ['Classic', TradingClassic]] as const) {
+    test(`${name}: blank install shows Not configured with Set up links and no numbers (T-1)`, () => {
+      const html = renderWithRouter(createElement(Tree, { model: tradingModel(blank(), { brandName: 'GladOS' }), pushPath: '/api/trading/snapshot', setup }));
+      expect(html).toContain('Not configured');
+      expect(html).toContain('href="/integrations#robinhood"');
+      expect(html).toContain('href="/integrations#phantom"');
+      expect(html).toContain('Connect the Markets agent feed. Its first push fills this page.');
+      expect(html).toContain('/api/trading/snapshot');
+      expect(html).not.toMatch(/\$\d/);
+      expect(html).not.toContain('data-sample-badge');
+    });
+
+    test(`${name}: live board renders every card; no Sample badge`, () => {
+      const html = renderWithRouter(createElement(Tree, { model: tradingModel(live(), { brandName: 'GladOS' }), pushPath: '/api/trading/snapshot', setup }));
+      for (const t of ['Agent sleeve', 'Accounts', 'Agent reasoning', 'Positions', 'Open orders', 'Trade log', 'Agent limits']) expect(html).toContain(t);
+      expect(html).toContain('Only the agentic sleeve can be traded by an agent. Wallet read from a public RPC.');
+      expect(html).toContain('SOFI');
+      expect(html).not.toContain('data-sample-badge');
+    });
+
+    test(`${name}: sample shows the Sample badge and read-only limits`, () => {
+      const p = live();
+      p.sample = true;
+      p.mode = 'filming';
+      const html = renderWithRouter(createElement(Tree, { model: tradingModel(p, { brandName: 'GladOS' }), pushPath: '/api/trading/snapshot', setup }));
+      expect(html).toContain('data-sample-badge');
+      expect(html).toContain('Sample data: limits are read only here');
+    });
+
+    test(`${name}: empty feed (no positions, trades or analysis) says so plainly`, () => {
+      const p = live();
+      p.positions = [];
+      p.activity = [];
+      p.analysis = null;
+      p.openOrders = [];
+      p.view = buildView({ accounts: p.accounts, positions: [], activity: [], phantom: p.phantom, now: NOW.getTime() });
+      const html = renderWithRouter(createElement(Tree, { model: tradingModel(p, { brandName: 'GladOS' }), pushPath: '/api/trading/snapshot', setup }));
+      expect(html).toContain('No open positions.');
+      expect(html).toContain('No trades yet.');
+      expect(html).toContain('No analysis pushed yet.');
+      expect(html).toContain('No live orders at the broker.');
+    });
+
+    test(`${name}: no limits saved keeps autopilot locked behind a reason`, () => {
+      const html = renderWithRouter(createElement(Tree, { model: tradingModel(live(0, { limits: false }), { brandName: 'GladOS' }), pushPath: '/api/trading/snapshot', setup }));
+      expect(html).toContain('No limits saved');
+      expect(html).toContain('Save limits first');
+    });
+  }
+});
+
+describe('trading wiring and house rules', () => {
+  const g = read('components/trading/TradingG.tsx');
+  const c = read('components/trading/TradingClassic.tsx');
   const page = read('app/trading/page.tsx');
 
-  test('the page is a server component that builds the payload through the repo, every account', () => {
-    expect(page).not.toMatch(/^'use client';/);
-    expect(page).toMatch(/tradingPayload\(/);
-    expect(page).toContain('TradingBoard');
-    const payload = read('lib/trading-payload.ts');
-    expect(payload).toMatch(/latestSnapshots\(\)/);
-    expect(payload).toMatch(/latestAnalysis\(AGENTIC_ID\)/);
-    expect(payload).toMatch(/openOrders\(\)/);
-    expect(payload).toMatch(/phantomBalance\(\)/);
+  test('nav: Revenue, after Finances, Trading with CandlestickChart', () => {
+    const i = NAV_ITEMS.findIndex((n) => n.href === '/trading');
+    expect(NAV_ITEMS[i - 1].href).toBe('/finances');
+    expect(NAV_ITEMS[i].label).toBe('Trading');
+    expect(read('lib/nav.ts')).toMatch(/href: '\/trading', label: 'Trading', icon: CandlestickChart/);
   });
 
-  test('the read route serves the very same payload, so the board refresh cannot drift from first paint', () => {
-    expect(read('app/api/trading/route.ts')).toMatch(/tradingPayload\(/);
-  });
-});
-
-describe('the trading slab', () => {
-  const board = read('components/trading/TradingBoard.tsx');
-
-  test('is a client board that refreshes from the read route every 60s and on demand', () => {
-    expect(board).toMatch(/^'use client';/);
-    expect(board).toContain("fetch('/api/trading')");
-    expect(board).toMatch(/setInterval\(refresh, 60_000\)/);
-    expect(board).toMatch(/Refresh feed/);
+  test('one build, trees only render; registered for the guard', () => {
+    expect(page).toContain('buildTradingPage(searchParams)');
+    expect(page).toMatch(/treeFor\(getAppearance\(\), '\/trading'\)/);
+    expect(G_READY).toContain('/trading');
+    expect(G_TREE_FILES['/trading']).toContain('components/trading/TradingG.tsx');
+    for (const src of [g, c]) {
+      expect(src).not.toMatch(/getDb|@\/lib\/data|fetch\(/);
+    }
   });
 
-  // Since 2026-09-24 the slab, the meters and the gradient card come from the
-  // shared kit (components/slab.tsx; see tests/trading-volume.test.ts).
-  test('floats as one slab with the Brand Deals motion: rise-in cards, drawn line, hatched meters, one gradient card', () => {
-    expect(board).toContain('<Slab>');
-    expect(board).toMatch(/@keyframes tb-rise/);
-    expect(board).toContain('<MeterStack');
-    expect((board.match(/<InsightCard/g) ?? []).length).toBe(1);
+  test('monitor only (T13): the only write is PATCH /api/trading/limits', () => {
+    const hook = read('components/trading/use-trading.ts');
+    const calls = [...hook.matchAll(/fetch\('([^']+)', \{ method: '(\w+)'/g)].map((m) => `${m[2]} ${m[1]}`);
+    expect(calls).toEqual(['PATCH /api/trading/limits']);
+    expect(hook).toContain('{ autopilot: true, confirm: true }');
   });
 
-  test('renders one balance meter per account and names which one the agent may trade', () => {
-    expect(board).toMatch(/accounts\.map/);
-    expect(board).toMatch(/accountLabel/);
-    expect(board).toMatch(/tradingVolume\(/);
-    const view = read('lib/trading-view.ts');
-    expect(view).toMatch(/agent may trade/);
-    expect(view).toMatch(/read-only to agents/);
+  test('GladOS tree: kit parts only, no raw controls, no literals, no mono class, no brand literal', () => {
+    expect(g).not.toMatch(/<(button|input|select|textarea)\b/);
+    expect(g).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsl\(/);
+    expect(g).not.toMatch(/font-mono/);
+    expect(code(g)).not.toContain('GladOS');
   });
 
-  test('gives the agent its own value graph fed by the agentic account, and says plainly when it has not traded', () => {
-    expect(board).toContain('AgentTradeChart');
-    expect(board).toMatch(/agentSummary\(/);
-    expect(board).toMatch(/AGENTIC_ID/);
-    expect(board).toMatch(/hasActed/);
-    expect(board).toMatch(/sitting in cash/);
+  test('Classic tree: no colour literals, no brand literal', () => {
+    expect(c).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsl\(/);
+    expect(code(c)).not.toContain('GladOS');
   });
 
-  test('the sleeve and the reasoning share one row, sleeve first, on a grid that keeps them level', () => {
-    const sleeve = board.indexOf('AgentTradeChart');
-    const reasoning = board.indexOf('<AgentReasoning');
-    expect(sleeve).toBeGreaterThan(-1);
-    expect(reasoning).toBeGreaterThan(sleeve);
-    // both cards sit in the same grid row; the reasoning list scrolls inside a cap instead of stretching the row
-    expect(board).toMatch(/grid-cols-\[2fr_1fr\]/);
-    const panel = read('components/AgentReasoning.tsx');
-    expect(panel).toMatch(/overflow-y-auto/);
-    expect(panel).toMatch(/No analysis pushed yet/);
-  });
-
-  test('the reasoning panel filters rows by verdict chips derived from the run', () => {
-    const panel = read('components/AgentReasoning.tsx');
-    expect(panel).toMatch(/^'use client';/);
-    expect(panel).toMatch(/Chip/);
-    expect(panel).toMatch(/'all'/);
-    expect(panel).toMatch(/new Set|verdicts/);
-    expect(panel).toMatch(/No .* rows|nothing marked/i);
-  });
-
-  test('open orders say who placed them, agent vs you, in the same badge language as the sleeve', () => {
-    expect(board).toMatch(/placedAgent === 'agentic' \? 'ok' : 'default'/);
-    expect(board).toMatch(/placedAgent === 'agentic' \? 'agent' : 'you'/);
-    expect(board).toMatch(/nothing working/);
-  });
-
-  test('the trade log is filterable by who and outcome, and the full rationale lives in a drawer, never truncated away', () => {
-    expect(board).toMatch(/filterActivity\(/);
-    expect(board).toMatch(/activityCounts\(/);
-    expect(board).toMatch(/line-clamp-2/);
-    expect(board).toMatch(/setSelectedId\(/);
-    expect(board).toMatch(/<aside/);
-  });
-
-  test('freshness is honest: live, stale, seeded or none, from the helper', () => {
-    expect(board).toMatch(/freshness\(/);
-    expect(board).toMatch(/'stale'/);
-    expect(board).toMatch(/'seeded'/);
-  });
-
-  test('mounts the limits editor and the Phantom wallet card', () => {
-    expect(board).toContain('TradingLimits');
-    expect(board).toMatch(/Phantom|phantom/);
-    // the wallet meter (and its short address) is built by the view-model
-    expect(read('lib/trading-view.ts')).toMatch(/Phantom · \$\{p\.sol\} SOL · \$\{shortAddress\(/);
-  });
-});
-
-describe('the agent chart component', () => {
-  const chart = read('components/AgentTradeChart.tsx');
-
-  test('is a client component with a hover readout', () => {
-    expect(chart).toContain("'use client'");
-    expect(chart).toMatch(/onMouseMove/);
-    expect(chart).toMatch(/onMouseLeave/);
-  });
-
-  test('draws from the pure geometry rather than its own math', () => {
-    expect(chart).toMatch(/chartGeometry\(/);
-  });
-
-  test('tells buys from sells by fill, not colour alone', () => {
-    expect(chart).toMatch(/action === 'buy'/);
-  });
-
-  test('holds its box before it has a series, so nothing shifts', () => {
-    expect(chart).toMatch(/aspectRatio/);
-  });
-
-  test('the line draws itself in, like the Brand Deals step-line', () => {
-    expect(chart).toMatch(/pathLength=\{1\}/);
-    expect(chart).toMatch(/strokeDashoffset/);
-  });
-});
-
-/**
- * The limits card. Alex asked to change the agent's parameters from the OS
- * rather than by editing DEFAULT_LIMITS and redeploying, so every field the
- * agent enforces has to be present and editable.
- */
-describe('/trading limits editor', () => {
-  const board = read('components/trading/TradingBoard.tsx');
-  const card = read('components/TradingLimits.tsx');
-
-  const FIELDS = [
-    'maxNotionalPerTradeUsd',
-    'maxPositionPctOfSleeve',
-    'maxRiskPctPerTrade',
-    'maxConcurrentPositions',
-    'maxTradesPerDay',
-    'minSleeveValueUsd',
-    'maxDeployedCapitalUsd',
-  ];
-
-  test('the slab mounts the card', () => {
-    expect(board).toContain('<TradingLimits');
-  });
-
-  test('the card is a client component', () => {
-    expect(card).toMatch(/^'use client';/);
-  });
-
-  test('every enforced field is editable, none silently omitted', () => {
-    for (const f of FIELDS) expect(card, `${f} missing from the editor`).toContain(f);
-  });
-
-  test('it reads and writes the real route', () => {
-    expect(card).toContain('/api/trading/limits');
-    expect(card).toMatch(/method:\s*'POST'/);
-  });
-
-  test('it surfaces clamping and failure rather than always claiming success', () => {
-    expect(card).toMatch(/clamped/);
-    expect(card).toMatch(/error/i);
-  });
-
-  test('the Autopilot switch is on the card, off by default, and says what it arms', () => {
-    expect(card).toContain('autopilot');
-    expect(card).toMatch(/Autopilot/);
-    expect(card).toMatch(/role="switch"/);
-    expect(card).toMatch(/real orders/i);
-  });
-
-  test('the old server-page pieces are gone, not left as orphans', () => {
-    expect(existsSync(join(process.cwd(), 'components/RefreshFeed.tsx'))).toBe(false);
+  test('Trading CSS block uses tokens only', () => {
+    const css = read('app/globals.css');
+    const block = css.slice(css.indexOf('/* ── Trading (/trading'), css.indexOf('/* ── end Trading ── */'));
+    expect(block.length).toBeGreaterThan(100);
+    expect(block).not.toMatch(/#[0-9a-fA-F]{3,8}\b|rgba?\(|hsl\(/);
+    expect(block).toMatch(/prefers-reduced-motion: reduce/);
   });
 });

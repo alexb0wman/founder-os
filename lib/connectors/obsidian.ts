@@ -1,10 +1,9 @@
-import { GATED, connected as gatedConnected } from '@/lib/connectors/demo-status';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { ConnectorStatus } from '@/lib/connectors/types';
 
-const VAULT = process.env.OBSIDIAN_VAULT ?? '';
+const VAULT = process.env.OBSIDIAN_VAULT ?? path.join(os.homedir(), 'Documents', 'Notes Vault');
 const WALK_CAP = 5000;
 
 function countMarkdown(dir: string, state = { files: 0, visited: 0 }): number {
@@ -30,7 +29,7 @@ function countMarkdown(dir: string, state = { files: 0, visited: 0 }): number {
 const NOTE_CONTENT_CAP = 20_000;
 
 /**
- * Read the vault's markdown notes as BrainNote-shaped
+ * Read the vault's markdown notes (incl. the Chat Archive) as BrainNote-shaped
  * `{ path, content }` rows for the /brain memory constellation. Vault-relative
  * paths, dot-dirs skipped, content capped, never throws — a missing vault or a
  * macOS TCC denial yields `[]` so callers can fall back gracefully.
@@ -68,11 +67,10 @@ export function readVaultNotes(vaultPath: string = VAULT): { path: string; conte
 }
 
 export async function obsidianStatus(): Promise<ConnectorStatus> {
-  if (GATED) return gatedConnected('obsidian', 'Obsidian', 'knowledge', '800+ notes indexed');
   if (!fs.existsSync(VAULT)) {
     return {
       id: 'obsidian',
-      name: 'Obsidian Vault',
+      name: 'Notes Vault',
       kind: 'knowledge',
       state: 'not_configured',
       detail: `Vault not found at ${VAULT} — set OBSIDIAN_VAULT to override.`,
@@ -85,7 +83,7 @@ export async function obsidianStatus(): Promise<ConnectorStatus> {
   } catch {
     return {
       id: 'obsidian',
-      name: 'Obsidian Vault',
+      name: 'Notes Vault',
       kind: 'knowledge',
       state: 'error',
       detail:
@@ -95,10 +93,10 @@ export async function obsidianStatus(): Promise<ConnectorStatus> {
   const notes = countMarkdown(VAULT);
   return {
     id: 'obsidian',
-    name: 'Obsidian Vault',
+    name: 'Notes Vault',
     kind: 'knowledge',
     state: 'connected',
-    detail: `${notes.toLocaleString('en-US')} markdown notes at ${VAULT.replace(os.homedir(), '~')}`,
+    detail: `${notes.toLocaleString('en-US')} markdown notes (incl. Chat Archive) at ${VAULT.replace(os.homedir(), '~')}`,
     meta: { notes },
   };
 }

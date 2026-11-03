@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSkillFrontmatter, skillGroup } from '@/lib/skills-catalog';
+import { parseSkillFrontmatter, skillGroup, splitGroup } from '@/lib/skills-catalog';
 
 describe('parseSkillFrontmatter', () => {
   it('reads an inline name + description', () => {
@@ -27,16 +27,30 @@ describe('parseSkillFrontmatter', () => {
   });
 });
 
-describe('skillGroup', () => {
-  it('buckets skills into sensible groups', () => {
-    expect(skillGroup('firecrawl-scrape')).toBe('Firecrawl');
-    expect(skillGroup('firecrawl')).toBe('Firecrawl');
-    expect(skillGroup('build')).toBe('Spec · build · review');
-    expect(skillGroup('spec')).toBe('Spec · build · review');
-    expect(skillGroup('codex')).toBe('Engineering');
-    expect(skillGroup('mcp-builder')).toBe('Engineering');
-    expect(skillGroup('nano-banana')).toBe('Creative');
-    expect(skillGroup('proposal-generator')).toBe('Sales');
-    expect(skillGroup('something-else')).toBe('Skills');
+describe('skillGroup — the scope taxonomy (where a skill is allowed to live)', () => {
+  // The taxonomy became two-level ("Domain/Group") when the library outgrew a
+  // flat scope ring; splitGroup is what the hierarchy renders from.
+  it('buckets brand-scoped skills to their brand', () => {
+    // No brand prefixes are configured on a fresh install: brand slugs stay uncategorised.
+    expect(skillGroup('acme-proposal')).toBe('General/Uncategorised');
+    expect(skillGroup('my-voice-writing')).toBe('Voice/Registers');
+    expect(skillGroup('my-voice-satirical-video')).toBe('Voice/Registers');
+  });
+  it('buckets craft and system skills', () => {
+    expect(skillGroup('01-cinematic')).toBe('Content/Video prompts');
+    expect(skillGroup('reel')).toBe('Content/Analysis');
+    expect(skillGroup('youtube-transcribe')).toBe('Content/Analysis');
+    expect(skillGroup('deck-dna')).toBe('Design/Decks & slides');
+    expect(skillGroup('slide-copy')).toBe('Design/Decks & slides');
+    expect(skillGroup('glados-futurism')).toBe('Design/Decks & slides');
+    expect(skillGroup('learn')).toBe('Operating system/Meta');
+    expect(skillGroup('skill-distiller')).toBe('Operating system/Meta');
+    expect(skillGroup('attack-surface-audit')).toBe('Engineering/Security');
+  });
+  it('splits a two-level group into its levels', () => {
+    expect(splitGroup('Brands/Venture A')).toEqual({ domain: 'Brands', group: 'Venture A' });
+    expect(splitGroup('General/Uncategorised')).toEqual({ domain: 'General', group: 'Uncategorised' });
+    // a bare label is its own domain, so a group file that says one word still renders
+    expect(splitGroup('Solo')).toEqual({ domain: 'Solo', group: 'Solo' });
   });
 });

@@ -1,7 +1,7 @@
 import { WorkflowInputSchema, type WorkflowInput } from '../shared';
 
 /**
- * Everything the drafting route needs that ISN'T a route export lives here -
+ * Everything the drafting route needs that ISN'T a route export lives here —
  * Next.js's route type-checker rejects a route.ts module with any named
  * export besides HTTP verbs and a small allow-list (dynamic, runtime, …), so
  * the pure, directly-testable pieces (prompt building, reply parsing, the
@@ -9,7 +9,7 @@ import { WorkflowInputSchema, type WorkflowInput } from '../shared';
  * route.ts, and never invoke the real `claude` binary.
  */
 
-export const SCHEMA_INSTRUCTIONS = `Reply with STRICT JSON only: no prose, no markdown code fences: matching exactly this shape:
+export const SCHEMA_INSTRUCTIONS = `Reply with STRICT JSON only — no prose, no markdown code fences — matching exactly this shape:
 {
   "name": string,
   "subtitle": string,
@@ -18,7 +18,7 @@ export const SCHEMA_INSTRUCTIONS = `Reply with STRICT JSON only: no prose, no ma
       "title": string,
       "detail": string,           // one or two sentences, what actually happens in this step
       "ownerKind": "human" | "agent",
-      "owner": string,            // a name: a real person or a plausible agent name
+      "owner": string,            // a name — a real person or a plausible agent name
       "hoursPerWeek": number,     // >= 0
       "tools": string[],          // short lowercase tool ids, e.g. "gmail", "attio", "notion"
       "automation": null | { "title": string, "state": "live" | "suggested", "recoveredUsd": number },
@@ -27,12 +27,12 @@ export const SCHEMA_INSTRUCTIONS = `Reply with STRICT JSON only: no prose, no ma
     }
   ]
 }
-Steps run in array order by default (step i follows step i-1). Only set branchFromIndex when the workflow genuinely forks (e.g. "if approved, do X; if rejected, do Y"): branchFromIndex must point at an earlier index in the SAME array. Most workflows do not need any branching at all.`;
+Steps run in array order by default (step i follows step i-1). Only set branchFromIndex when the workflow genuinely forks (e.g. "if approved, do X; if rejected, do Y") — branchFromIndex must point at an earlier index in the SAME array. Most workflows do not need any branching at all.`;
 
 export function buildPrompt(userPrompt: string, priorError?: string): string {
   const base = `You are drafting a business workflow for an operator dashboard. The operator describes a process; you map it into discrete steps, each owned by a human or an agent.\n\nDescribe: ${userPrompt}\n\n${SCHEMA_INSTRUCTIONS}`;
   if (!priorError) return base;
-  return `${base}\n\nYour previous reply failed validation with this error:\n${priorError}\nReply again with ONLY corrected strict JSON: nothing else.`;
+  return `${base}\n\nYour previous reply failed validation with this error:\n${priorError}\nReply again with ONLY corrected strict JSON — nothing else.`;
 }
 
 /** Pulls the model's reply text out of a `claude -p ... --output-format
@@ -48,7 +48,7 @@ export function extractReplyText(stdout: string): string {
       if (typeof (envelope as any).message === 'string') return (envelope as any).message;
     }
   } catch {
-    // stdout wasn't a JSON envelope at all: treat it as the reply text itself
+    // stdout wasn't a JSON envelope at all — treat it as the reply text itself
   }
   return trimmed;
 }
@@ -60,8 +60,8 @@ function stripCodeFence(text: string): string {
   return (fenced ? fenced[1] : text).trim();
 }
 
-/** Parses + validates one CLI reply into a `WorkflowInput`. Pure: no
- *  process spawning: so this is what the tests exercise directly instead
+/** Parses + validates one CLI reply into a `WorkflowInput`. Pure — no
+ *  process spawning — so this is what the tests exercise directly instead
  *  of mocking `execFile`. */
 export function parseWorkflowDraft(stdout: string): { ok: true; data: WorkflowInput } | { ok: false; error: string } {
   const text = stripCodeFence(extractReplyText(stdout));
@@ -79,7 +79,7 @@ export function parseWorkflowDraft(stdout: string): { ok: true; data: WorkflowIn
 export type CliResult = { ok: true; stdout: string } | { ok: false; unavailable: boolean; error: string };
 
 /** Shells out to the `claude` CLI, resolved from PATH (no hardcoded path).
- *  Never throws: a missing binary, a timeout, or a nonzero exit all come
+ *  Never throws — a missing binary, a timeout, or a nonzero exit all come
  *  back as an honest `{ ok: false, unavailable, error }` for the route to
  *  degrade against, rather than a fabricated draft. */
 export async function runClaude(prompt: string): Promise<CliResult> {

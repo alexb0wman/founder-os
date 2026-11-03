@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { createRuntime, type RuntimeAgent } from '@/lib/agents/runtime';
 
-let db: FounderDb;
+let db: GladosDb;
 
 afterEach(() => {
   db?.close();
@@ -70,5 +70,19 @@ describe('agent runtime', () => {
     const recent = db.agentRuns.recent(10);
     expect(recent).toHaveLength(2);
     expect(recent[0].agentId).toBe('test-fail');
+  });
+
+  test('agentRuns.count is uncapped and latest is the newest run (SPEC C20)', async () => {
+    db = openDb(':memory:');
+    expect(db.agentRuns.count()).toBe(0);
+    expect(db.agentRuns.latest()).toBeNull();
+    for (let i = 0; i < 12; i++) {
+      const ts = new Date(Date.UTC(2026, 0, 1, 0, i)).toISOString();
+      db.agentRuns.insert({ id: `r${i}`, agentId: i % 2 ? 'a' : 'b', startedAt: ts, finishedAt: ts, ok: true, summary: `run ${i}` });
+    }
+    expect(db.agentRuns.recent(5)).toHaveLength(5);
+    expect(db.agentRuns.count()).toBe(12);
+    expect(db.agentRuns.latest()?.id).toBe('r11');
+    expect(db.agentRuns.latest()).toEqual(db.agentRuns.recent(1)[0]);
   });
 });

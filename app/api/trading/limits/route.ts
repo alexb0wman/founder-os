@@ -1,55 +1,54 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/data';
-import { TradingLimitsSchema } from '@/lib/schemas';
-import { DEFAULT_LIMITS, clampLimits, type EditableLimits } from '@/lib/trading-guardrails';
+import { isConfirmed } from '@/lib/gates';
+import { authorizePush } from '@/lib/push-auth';
+import { clampLimits } from '@/lib/trading-view';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 /**
- * The Markets Agent's guardrail limits, read by the agent at the start of every
- * run and edited from the /trading card.
+ * The trading agent's limits (pages/trading.md §2, T-5).
  *
- * Same private network trust model as the other /api/trading/* routes, which is exactly
- * why clampLimits() runs on the way IN as well as on the way out: this route can
- * change how much real money an agent deploys, so no request can push a value
- * past LIMIT_BOUNDS regardless of what it asks for. Widening those needs a code
- * edit and a deploy.
+ * GET   the stored row, or `limits: null` ("No limits saved"; never code
+ *       defaults dressed as stored). The Markets agent reads it at the start
+ *       of every run with its TRADING_PUSH_TOKEN, or the operator's session.
+ * PATCH operator session only (a push token is refused). The 7 numbers are
+ *       clamped into the schema ranges and the clamped list is returned.
+ *       Turning autopilot ON needs `confirm: true` (409 without it): the
+ *       Markets agent will place real orders inside these limits. GladOS
+ *       itself places no orders; turning it off needs no confirm.
  */
-
-/** The 7 numeric fields, without the code-only symbol lists. */
-function editable(l: typeof DEFAULT_LIMITS): EditableLimits {
-  const { allowedSymbols: _a, blockedSymbols: _b, ...rest } = l;
-  return rest;
+export async function GET(req: Request) {
+  const auth = authorizePush(req, 'TRADING_PUSH_TOKEN');
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  return NextResponse.json({ limits: getDb().trading.limits() });
 }
 
-export async function GET() {
-  const stored = getDb().trading.limits();
-  const { limits, clamped } = clampLimits(stored ?? editable(DEFAULT_LIMITS));
-  return NextResponse.json({
-    // the switch rides beside the numbers; the clamp only knows the numbers
-    limits: { ...limits, autopilot: stored?.autopilot ?? false },
-    clamped,
-    source: stored ? 'stored' : 'default',
-    updatedAt: getDb().trading.limitsUpdatedAt(),
-  });
-}
+export async function PATCH(req: Request) {
+  const auth = authorizePush(req, 'TRADING_PUSH_TOKEN');
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  if (auth.via === 'token') return NextResponse.json({ error: 'limits are changed by the operator only' }, { status: 403 });
 
-export async function POST(req: Request) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 });
+  const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!body || typeof body !== 'object') return NextResponse.json({ error: 'JSON body required' }, { status: 400 });
+
+  const t = getDb().trading;
+  const current = t.limits();
+  // A partial PATCH fills from the stored row; with nothing stored every field is required.
+  const merged = { ...(current ?? {}), ...body };
+  const { limits, clamped, invalid } = clampLimits(merged);
+  if (invalid.length) return NextResponse.json({ error: 'every limit must be a number', fields: invalid }, { status: 400 });
+  if (body.autopilot !== undefined && typeof body.autopilot !== 'boolean') {
+    return NextResponse.json({ error: 'autopilot must be true or false' }, { status: 400 });
   }
-  const parsed = TradingLimitsSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ ok: false, error: parsed.error.issues }, { status: 400 });
+  const autopilot = typeof body.autopilot === 'boolean' ? body.autopilot : (current?.autopilot ?? false);
+  if (autopilot && !current?.autopilot && !isConfirmed(body)) {
+    return NextResponse.json(
+      { error: 'Turning on autopilot lets the Markets agent place real orders inside these limits. Resend with "confirm": true.', needsConfirm: true },
+      { status: 409 },
+    );
   }
-  // Store the clamped values, not the requested ones, and echo back what was
-  // actually written — telling the operator their number took when it did not
-  // would be worse than rejecting it.
-  const { limits, clamped } = clampLimits(parsed.data);
-  const stored = { ...limits, autopilot: parsed.data.autopilot };
-  getDb().trading.saveLimits(stored);
-  return NextResponse.json({ ok: true, limits: stored, clamped });
+  t.saveLimits({ ...limits, autopilot });
+  return NextResponse.json({ ok: true, limits: t.limits(), clamped });
 }

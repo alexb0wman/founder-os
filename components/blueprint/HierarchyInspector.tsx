@@ -1,5 +1,6 @@
 'use client';
 
+import { useGc } from '@/components/system-g/style-context';
 import type { CSSProperties } from 'react';
 import { Focus, Maximize2, Minimize2, PanelRightClose, PanelRightOpen, Scan, X } from 'lucide-react';
 import { KIND_ICON, KIND_LABEL, STATUS_LABEL, relationsOf, type HAny, type Hierarchy, type HierarchyIndex } from '@/lib/blueprint/hierarchy';
@@ -9,7 +10,7 @@ const colorOf = (it: HAny) => `var(--bh-k-${it.kind}, var(--text-2))`;
 
 /**
  * Right glass panel: one tab per opened thing (last five), the active one
- * showing what it is, its facts, what is inside it and every connection -
+ * showing what it is, its facts, what is inside it and every connection —
  * each connection a click that jumps the map there.
  */
 export function HierarchyInspector({
@@ -39,6 +40,7 @@ export function HierarchyInspector({
   onFit: () => void;
   onToggle: (id: string) => void;
 }) {
+  const gc = useGc();
   const has = opened.length > 0;
   const current = active && opened.includes(active) ? active : opened[opened.length - 1];
   const it = current ? idx.items.get(current) : undefined;
@@ -58,7 +60,7 @@ export function HierarchyInspector({
 
   return (
     <>
-      <button type="button" className="pressable bh-insp-handle" title="Show details (i)" onClick={() => onMinimize(false)} style={{ display: has && minimized ? 'inline-flex' : 'none' }}>
+      <button type="button" className={gc('bh-insp-handle g-btn g-btn-sm', 'bh-insp-handle')} title="Show details (i)" onClick={() => onMinimize(false)} style={{ display: has && minimized ? 'inline-flex' : 'none' }}>
         <PanelRightOpen />
         <span>{handleLabel}</span>
       </button>
@@ -66,7 +68,7 @@ export function HierarchyInspector({
         <div className="bh-insp-bar">
           <div className="bh-insp-tabs">
             {opened.map((id) => (
-              <button key={id} type="button" className={`pressable bh-itab ${id === current ? 'is-on' : ''}`} onClick={() => onSelect(id)}>
+              <button key={id} type="button" className={gc(`bh-itab g-chip ${id === current ? 'is-on' : ''}`, `bh-itab ${id === current ? 'is-on' : ''}`)} aria-pressed={gc('1', '') ? id === current : undefined} onClick={() => onSelect(id)}>
                 <span>{idx.items.get(id)?.name ?? id}</span>
                 <span
                   className="x"
@@ -82,7 +84,7 @@ export function HierarchyInspector({
               </button>
             ))}
           </div>
-          <button type="button" className="pressable bh-insp-min" title="Hide panel (i)" onClick={() => onMinimize(true)}>
+          <button type="button" className={gc('bh-insp-min g-btn g-btn-icon g-btn-sm', 'bh-insp-min')} aria-label="Hide panel" title="Hide panel (i)" onClick={() => onMinimize(true)}>
             <PanelRightClose />
           </button>
         </div>
@@ -188,17 +190,17 @@ export function HierarchyInspector({
               </div>
             )}
             <div className="bh-insp-actions">
-              <button type="button" className="pressable bh-btn" onClick={onFocus}>
+              <button type="button" className={gc('g-btn g-btn-sm', 'bh-btn')} onClick={onFocus}>
                 <Focus />
                 <span>Focus</span>
               </button>
               {it.type === 'group' ? (
-                <button type="button" className="pressable bh-btn" onClick={() => onToggle(it.id)}>
+                <button type="button" className={gc('g-btn g-btn-sm', 'bh-btn')} onClick={() => onToggle(it.id)}>
                   {expanded.has(it.id) ? <Minimize2 /> : <Maximize2 />}
                   <span>{expanded.has(it.id) ? 'Collapse' : 'Expand'}</span>
                 </button>
               ) : (
-                <button type="button" className="pressable bh-btn" onClick={onFit}>
+                <button type="button" className={gc('g-btn g-btn-sm', 'bh-btn')} onClick={onFit}>
                   <Scan />
                   <span>Whole map</span>
                 </button>

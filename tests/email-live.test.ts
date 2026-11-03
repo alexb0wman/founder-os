@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { buildEmailList, syncBeehiivEmail } from '@/lib/email-list';
 
-let db: FounderDb;
+let db: GladosDb;
 afterEach(() => db?.close());
 
 describe('syncBeehiivEmail', () => {

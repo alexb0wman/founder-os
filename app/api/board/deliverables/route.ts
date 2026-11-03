@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { deliverableDecisions } from '@/founderos/lib/decisions';
 import path from 'node:path';
 import { NextResponse } from 'next/server';
 import {
@@ -7,8 +8,8 @@ import {
   listDeliverables,
   resolveDeliverable,
   WORKSPACES_DIR,
-} from '@/lib/board-deliverables';
-import { clampPreview, previewKind } from '@/lib/deliverable-preview';
+} from '@/founderos/lib/board-deliverables';
+import { clampPreview, previewKind } from '@/founderos/lib/deliverable-preview';
 import { getDb } from '@/lib/data';
 
 export const dynamic = 'force-dynamic';
@@ -38,9 +39,9 @@ export async function GET(request: Request) {
     const files = listDeliverables();
     const db = getDb();
     return NextResponse.json({
-      groups: groupDeliverables(files, db.proposals.all()),
+      groups: groupDeliverables(files, []),
       deliverables: files,
-      decisions: db.deliverableDecisions.all(),
+      decisions: deliverableDecisions.all(),
       dir: WORKSPACES_DIR,
     });
   }

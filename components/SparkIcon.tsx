@@ -1,13 +1,14 @@
 /**
- * The agent emblem — the real Vantage mark (public/vantage-emblem.png,
- * processed from the brand asset: background keyed out, cropped).
- *
- * The PNG is used as a CSS mask over a solid color, so `shade` tints the exact
- * brand silhouette to any color — black for the Conductor, each department's
- * life-area color for its agents, etc. (The mint PNG was invisible on the
- * light theme's white; masking fixes that.)
+ * The agent emblem — a concentric core (dot + orbit ring), inlined as an SVG
+ * data-URI mask. Replaced the four-point spark 2026-08-24  — the rings echo the Optimal Engine
+ * radial core instead. The mask sits over a solid color, so `shade` tints
+ * the silhouette to any color — black for the Wizard, each department's
+ * life-area color for its agents, etc.
  */
-export const EMBLEM_MINT = '#00ffab';
+export const EMBLEM_MINT = 'var(--accent)';
+
+const SPARK_MASK =
+  "url(\"data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='15'/%3E%3Cpath d='M50 12 a38 38 0 1 0 0.001 0 Z M50 21 a29 29 0 1 1 -0.001 0 Z' fill-rule='evenodd'/%3E%3C/svg%3E\")";
 
 export function SparkIcon({
   size = 28,
@@ -21,7 +22,7 @@ export function SparkIcon({
   return (
     <span
       role="img"
-      aria-label="Vantage"
+      aria-label="Agent"
       className={`emblem inline-block shrink-0 ${className}`}
       style={{
         width: size,
@@ -29,8 +30,8 @@ export function SparkIcon({
         backgroundColor: shade,
         // color drives the hover drop-shadow glow (.emblem in globals.css)
         color: shade,
-        WebkitMaskImage: 'url(/vantage-emblem.png)',
-        maskImage: 'url(/vantage-emblem.png)',
+        WebkitMaskImage: SPARK_MASK,
+        maskImage: SPARK_MASK,
         WebkitMaskRepeat: 'no-repeat',
         maskRepeat: 'no-repeat',
         WebkitMaskPosition: 'center',

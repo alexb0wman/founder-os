@@ -1,6 +1,7 @@
-import { GATED, connected as gatedConnected } from '@/lib/connectors/demo-status';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import type { ConnectorStatus } from '@/lib/connectors/types';
 
 /**
@@ -29,56 +30,58 @@ function binExists(...candidates: string[]): string | null {
   return null;
 }
 
+function tmuxSessions(): Promise<number> {
+  return new Promise((resolve) => {
+    execFile('tmux', ['list-sessions', '-F', '#{session_name}'], { timeout: 2000 }, (err, stdout) => {
+      resolve(err ? 0 : stdout.split('\n').filter(Boolean).length);
+    });
+  });
+}
+
+const HOME = os.homedir();
 const BREW = '/opt/homebrew/bin';
 
-/**
- * Both agent services run on the host, so a bare localhost probe reports them
- * down from anywhere else, including the laptop, where the OS is also
- * opened. Use the configured address when there is one (PAPERCLIP_API_URL is
- * already set for the board connector) and fall back to the loopback ports the
- * host itself serves on.
- */
-const paperclipUrl = (): string => process.env.PAPERCLIP_API_URL || 'http://localhost:3100';
-const hermesUrl = (): string => process.env.HERMES_GATEWAY_URL || 'http://localhost:8642';
-const gbrainBin = (): string => process.env.GBRAIN_BIN || '';
-
 export async function localStackStatus(): Promise<ConnectorStatus> {
-  if (GATED) return gatedConnected('local-stack', 'Local Stack', 'local', 'services up');
+  const [commandCenter, remotionStudio, ollama, openclawGateway, tmuxCount] = await Promise.all([
+    ping('http://localhost:4000'),
+    ping('http://localhost:3789'),
+    ping('http://localhost:11434/api/tags'),
+    ping('http://localhost:8090'),
+    tmuxSessions(),
+  ]);
 
-  // Design choice: this lists ONLY what Founder OS itself runs or shells out
-  // to. Anything reached through a hosted API instead of a local process was
-  // dropped from this panel: reporting on it made the panel look broken
-  // while conveying nothing about the OS's actual local dependencies.
-  // No self-check: if you are reading this panel the OS is obviously up, and
-  // an SSR request to our own port reported DOWN on the host while serving the
-  // very page it appears on. A check that can only be true-or-wrong is worse
-  // than no check. Everything below is a real external dependency.
-  const [paperclipBoard, hermesGateway] = await Promise.all([ping(paperclipUrl()), ping(hermesUrl())]);
+  const remotionDir = fs.existsSync(path.join(HOME, 'Projects', 'remotion-pipeline'));
 
   const checks: Check[] = [
-    { name: 'paperclip', up: paperclipBoard, detail: `agent board · ${paperclipUrl().replace(/^https?:\/\//, '')}` },
-    { name: 'hermes', up: hermesGateway, detail: `worker pool · ${hermesUrl().replace(/^https?:\/\//, '')}` },
+    { name: 'command-center', up: commandCenter, detail: 'command-center :4000' },
     {
-      name: 'gbrain',
-      up: Boolean(binExists(gbrainBin(), `${BREW}/gbrain`)),
-      detail: 'knowledge CLI behind /brain',
+      name: 'remotion',
+      up: remotionStudio || remotionDir,
+      detail: remotionStudio ? 'studio live :3789' : remotionDir ? 'pipeline installed' : 'missing',
     },
-    {
-      name: 'ffmpeg',
-      up: Boolean(binExists(`${BREW}/ffmpeg`, '/usr/local/bin/ffmpeg')),
-      detail: 'content-gen media processing',
-    },
-    {
-      name: 'pdftotext',
-      up: Boolean(binExists(`${BREW}/pdftotext`, '/usr/local/bin/pdftotext')),
-      detail: 'statement ingestion (/finances)',
-    },
+    { name: 'ollama', up: ollama, detail: 'local LLM :11434' },
+    { name: 'openclaw', up: openclawGateway, detail: 'gateway' },
+    { name: 'tmux', up: tmuxCount > 0, detail: `${tmuxCount} sessions` },
     {
       name: 'whisper',
       up: Boolean(binExists(`${BREW}/whisper-cli`, '/usr/local/bin/whisper-cli')),
       detail: 'local transcription',
     },
-    { name: 'gh', up: Boolean(binExists(`${BREW}/gh`, '/usr/local/bin/gh')), detail: 'GitHub CLI · deploys' },
+    {
+      name: 'ffmpeg',
+      up: Boolean(binExists(`${BREW}/ffmpeg`, '/usr/local/bin/ffmpeg')),
+      detail: 'media processing',
+    },
+    {
+      name: 'higgsfield',
+      up: Boolean(binExists(path.join(HOME, '.npm-global', 'bin', 'higgsfield'), `${BREW}/higgsfield`)),
+      detail: 'AI video CLI',
+    },
+    {
+      name: 'gh',
+      up: Boolean(binExists(`${BREW}/gh`, '/usr/local/bin/gh')),
+      detail: 'GitHub CLI',
+    },
   ];
 
   const up = checks.filter((c) => c.up);

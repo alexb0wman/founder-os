@@ -9,9 +9,9 @@ const wf: Workflow = {
   revenueUsd: 100_000,
   order: 0,
   steps: [
-    { id: 's1', title: 'A', detail: '', branch: null, ownerKind: 'human', owner: 'the operator', hoursPerWeek: 10, tools: ['attio', 'gmail'], edgeLabel: 'x', leakUsd: 14_000, automation: null },
-    { id: 's2', title: 'B', detail: '', branch: null, ownerKind: 'agent', owner: 'Bot', hoursPerWeek: 6, tools: ['attio', 'zernio'], edgeLabel: null, leakUsd: null, automation: { title: 'Auto', state: 'live', recoveredUsd: 4000 } },
-    { id: 's3', title: 'C', detail: '', branch: null, ownerKind: 'human', owner: 'the operator', hoursPerWeek: 5, tools: ['gmail'], edgeLabel: null, leakUsd: 6000, automation: { title: 'Sug', state: 'suggested', recoveredUsd: 6000 } },
+    { id: 's1', title: 'A', detail: '', ownerKind: 'human', owner: 'the operator', hoursPerWeek: 10, tools: ['attio', 'gmail'], edgeLabel: 'x', leakUsd: 14_000, automation: null, branch: null },
+    { id: 's2', title: 'B', detail: '', ownerKind: 'agent', owner: 'Bot', hoursPerWeek: 6, tools: ['attio', 'zernio'], edgeLabel: null, leakUsd: null, automation: { title: 'Auto', state: 'live', recoveredUsd: 4000 }, branch: null },
+    { id: 's3', title: 'C', detail: '', ownerKind: 'human', owner: 'the operator', hoursPerWeek: 5, tools: ['gmail'], edgeLabel: null, leakUsd: 6000, automation: { title: 'Sug', state: 'suggested', recoveredUsd: 6000 }, branch: null },
   ],
 };
 

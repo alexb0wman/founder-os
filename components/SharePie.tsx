@@ -4,10 +4,6 @@ import { pieSlices, type PieItem } from '@/lib/social-chart';
  * Monolith where color is reserved for status. */
 const SLICE_VARS = ['--funnel-s0', '--funnel-s1', '--funnel-s2', '--funnel-s3', '--funnel-s5', '--funnel-s6'];
 
-/** One full turn of the sweep hand, plus the lead-in before it starts. */
-const SWEEP_MS = 1100;
-const SWEEP_LEAD_MS = 200;
-
 const rad = (deg: number) => (deg * Math.PI) / 180;
 
 /** Donut arc path between two angles at radius r (ring thickness via stroke). */
@@ -50,7 +46,7 @@ export function SharePie({
 }) {
   const slices = pieSlices(items);
   if (slices.length === 0) {
-    return <p className="py-4 text-center font-mono text-[10.5px] text-os-dim">Nothing to chart yet.</p>;
+    return <p className="py-4 text-center text-[12.5px] text-os-dim">Nothing to chart yet.</p>;
   }
 
   const S = 168;
@@ -59,8 +55,8 @@ export function SharePie({
 
   return (
     <div
-      className={`flex ${stacked ? 'flex-col items-center gap-3' : 'items-center gap-4'} ${
-        framed ? 'h-full rounded-lg-t border border-os-border bg-os-surface px-4 py-3' : ''
+      className={`flex ${stacked ? 'flex-col items-center gap-4' : 'flex-wrap items-center justify-center gap-5'} ${
+        framed ? 'h-full rounded-lg-t border border-os-border bg-os-surface px-5 py-3' : ''
       }`}
     >
       <svg
@@ -70,42 +66,30 @@ export function SharePie({
         role="img"
         aria-label={ariaLabel}
       >
-        {slices.map((s, i) => {
-          // Clockwise sweep from 12 o'clock: each slice draws itself for a
-          // duration proportional to its share, starting where the previous
-          // slice ended, so the ring reads as one continuous hand at constant
-          // angular speed (linear per slice) landing on the real shares.
-          const before = slices.slice(0, i).reduce((acc, x) => acc + x.share, 0);
-          const delay = Math.round(SWEEP_LEAD_MS + before * SWEEP_MS);
-          const dur = Math.max(60, Math.round(s.share * SWEEP_MS));
-          return (
+        {slices.map((s, i) => (
           <path
             key={s.key}
             d={arcPath(C, C, R, s.startAngle + 0.6, s.endAngle - 0.6)}
-            pathLength={1}
-            className="sweep"
-            style={{ animation: `os-sweep ${dur}ms linear both`, animationDelay: `${delay}ms` }}
             fill="none"
-            stroke={`var(${SLICE_VARS[i % SLICE_VARS.length]})`}
+            stroke={s.color ?? `var(${SLICE_VARS[i % SLICE_VARS.length]})`}
             strokeWidth={17}
           >
             <title>{`${s.label} · ${format(s.value)} · ${(s.share * 100).toFixed(1)}%`}</title>
           </path>
-          );
-        })}
-        <text x={C} y={C - 3} textAnchor="middle" fill="var(--text)" fontSize={15} fontWeight={700} fontFamily="var(--font-mono)" letterSpacing="-0.02em">
+        ))}
+        <text x={C} y={C - 3} textAnchor="middle" fill="var(--text)" fontSize={16} fontWeight={400} fontFamily="var(--font-sans)" letterSpacing="-0.01em" style={{ fontVariantNumeric: 'tabular-nums' }}>
           {format(total)}
         </text>
-        <text x={C} y={C + 13} textAnchor="middle" fill="var(--text-3)" fontSize={7.5} fontFamily="var(--font-mono)" style={{ textTransform: 'uppercase', letterSpacing: '0.18em' }}>
+        <text x={C} y={C + 13} textAnchor="middle" fill="var(--text-3)" fontSize={8} fontFamily="var(--font-sans)">
           {centerLabel}
         </text>
       </svg>
 
-      <div className={`flex flex-col gap-1 ${stacked ? 'w-full' : 'min-w-0 flex-1'}`}>
+      <div className={`flex flex-col gap-1 ${stacked ? 'w-full' : 'min-w-[180px] flex-1'}`}>
         {slices.map((s, i) => (
-          <div key={s.key} className="flex items-center gap-2 font-mono text-[10px]">
-            <span className="h-2 w-2 shrink-0" style={{ background: `var(${SLICE_VARS[i % SLICE_VARS.length]})` }} />
-            <span className="min-w-0 flex-1 truncate uppercase tracking-[0.08em] text-os-dim">{s.label}</span>
+          <div key={s.key} className="flex items-center gap-3 text-[12px] tabular-nums">
+            <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: s.color ?? `var(${SLICE_VARS[i % SLICE_VARS.length]})` }} />
+            <span className="min-w-0 flex-1 truncate text-os-muted">{s.label}</span>
             <span className="shrink-0 text-os-muted">{format(s.value)}</span>
             <span className="w-11 shrink-0 text-right text-os-text">{(s.share * 100).toFixed(1)}%</span>
           </div>

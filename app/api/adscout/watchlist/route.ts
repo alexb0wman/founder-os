@@ -6,7 +6,7 @@ import { addWatchDomain, addWatchEntry, readWatchEntries, removeWatchEntry } fro
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-/** The local Adscout watchlist: add by domain (one resolve call) or by a
+/** The local Adscout watchlist — add by domain (one resolve call) or by a
  *  brand id already known from a mine result; remove by id. */
 
 export async function GET() {
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
   const client = createForeplayClient();
   if (!client) {
     return NextResponse.json(
-      { ok: false, error: 'Foreplay not configured: set FOREPLAY_API_KEY in .env.local' },
+      { ok: false, error: 'Foreplay not configured — set FOREPLAY_API_KEY in .env.local' },
       { status: 503 },
     );
   }

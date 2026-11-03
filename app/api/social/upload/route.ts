@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { zernioUploadTarget } from '@/lib/connectors/zernio';
+import { zernioUploadTarget } from '@/founderos/lib/zernio-upload';
 
 export const dynamic = 'force-dynamic';
 

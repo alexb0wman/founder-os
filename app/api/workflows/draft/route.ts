@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { buildPrompt, parseWorkflowDraft, runClaude } from './logic';
 
 export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs'; // shells out to a local binary: keep off the edge runtime
+export const runtime = 'nodejs'; // shells out to a local binary — keep off the edge runtime
 
 const DraftRequestSchema = z.object({ prompt: z.string().min(1).max(4000) });
 
@@ -11,7 +11,7 @@ const DraftRequestSchema = z.object({ prompt: z.string().min(1).max(4000) });
  * Drafts a workflow from a free-text description by shelling out to the
  * `claude` CLI. Validates the reply against WorkflowInputSchema (see
  * ./logic.ts); on a validation failure, retries once with the error
- * appended so the model can self-correct. Never writes to the database -
+ * appended so the model can self-correct. Never writes to the database —
  * the draft only fills the builder panel for the operator to review and
  * explicitly save. When the CLI is missing or errors, this returns an
  * honest `unavailable` state rather than fabricating a draft.
@@ -26,7 +26,7 @@ export async function POST(request: Request) {
       ok: false,
       unavailable: first.unavailable,
       error: first.unavailable
-        ? 'drafting assistant unavailable: build manually'
+        ? 'drafting assistant unavailable — build manually'
         : `drafting assistant failed: ${first.error}`,
     });
   }
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
       ok: false,
       unavailable: second.unavailable,
       error: second.unavailable
-        ? 'drafting assistant unavailable: build manually'
+        ? 'drafting assistant unavailable — build manually'
         : `drafting assistant failed: ${second.error}`,
     });
   }
@@ -51,6 +51,6 @@ export async function POST(request: Request) {
   return NextResponse.json({
     ok: false,
     unavailable: false,
-    error: `drafting assistant returned an invalid draft twice: build manually (${secondDraft.error})`,
+    error: `drafting assistant returned an invalid draft twice — build manually (${secondDraft.error})`,
   });
 }

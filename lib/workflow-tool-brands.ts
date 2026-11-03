@@ -12,23 +12,18 @@
 export type ToolBrand = { slug: string; name: string };
 
 export const TOOL_BRANDS: Record<string, ToolBrand> = {
-  adsmith: { slug: 'adsmith', name: 'Adsmith' },
-  ledger: { slug: 'ledger', name: 'Ledger' },
+  attio: { slug: 'attio', name: 'Attio' },
   calendar: { slug: 'googlecalendar', name: 'Google Calendar' },
+  camera: { slug: 'camera', name: 'Camera' },
+  'claude-code': { slug: 'anthropic', name: 'Claude Code' },
   ghl: { slug: 'gohighlevel', name: 'GoHighLevel' },
   gmail: { slug: 'gmail', name: 'Gmail' },
-  dmflow: { slug: 'dmflow', name: 'DMFlow' },
-  notion: { slug: 'notion', name: 'Notion' },
-  'proposal-gen': { slug: 'proposal-gen', name: 'Proposal Generator' },
-  skool: { slug: 'skool', name: 'Skool' },
-  slack: { slug: 'slack', name: 'Slack' },
-  trakyo: { slug: 'trakyo', name: 'Trakyo' },
-  postly: { slug: 'postly', name: 'Postly' },
-  camera: { slug: 'camera', name: 'Camera' },
   gsend: { slug: 'gsend', name: 'gsend' },
   instagram: { slug: 'instagram', name: 'Instagram' },
   linkedin: { slug: 'linkedin', name: 'LinkedIn' },
+  notion: { slug: 'notion', name: 'Notion' },
   premiere: { slug: 'premiere', name: 'Premiere Pro' },
+  slack: { slug: 'slack', name: 'Slack' },
   telegram: { slug: 'telegram', name: 'Telegram' },
   youtube: { slug: 'youtube', name: 'YouTube' },
 };

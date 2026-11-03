@@ -1,34 +1,33 @@
-import { UsageSnapshotSchema, type SeatUsage } from '@/lib/usage';
 import Database from 'better-sqlite3';
+import fs from 'node:fs';
+import { dirname, join } from 'node:path';
 import { isValidCron } from '@/lib/cron';
+import { labStore } from '@/lib/lab/store';
+import { tradingRepo } from '@/lib/db-ext/trading';
+import { clientConfirmationsRepo, clientWorkRepo } from '@/lib/db-ext/clients';
+import { leadMagnetsRepo } from '@/lib/db-ext/lead-magnets';
+import { usageReadingsRepo } from '@/lib/db-ext/usage';
+import { commsDigestsRepo } from '@/lib/db-ext/comms-digest';
+import { callRecordingsRepo } from '@/lib/db-ext/recordings';
+import { cronRunsRepo, deliverableDecisionsRepo } from '@/lib/db-ext/agent-ops';
 import {
   AgentCronSchema,
-  PlaudIngestSchema,
-  CronRunSchema,
   AgentMessageSchema,
   AgentRunSchema,
   AgentSchema,
   AgentTaskSchema,
+  AgentTaskStatusSchema,
+  type AgentTaskInput,
   BroadcastReplySchema,
   BroadcastSchema,
   ContactTagSchema,
   DepartmentSchema,
-  DomainSchema,
   MetricSchema,
-  PersonaSchema,
   PhaseSchema,
   RoadmapItemSchema,
   SocialAccountSchema,
   SocialSnapshotSchema,
-  MetricSnapshotSchema,
   EmailListSnapshotSchema,
-  TradingAccountSnapshotSchema,
-  TradingPositionSchema,
-  TradeActivitySchema,
-  TradingLimitsSchema,
-  TradeAnalysisSchema,
-  TradingOrderSchema,
-  ProposalSchema,
   SocialDmSchema,
   SocialDmSnapshotSchema,
   SocialDmMessageSchema,
@@ -39,12 +38,12 @@ import {
   PersonSchema,
   SopTaskSchema,
   WorkflowSchema,
+  WorkflowVersionSchema,
+  ConfigVersionSchema,
   SkillSchema,
   ToolSchema,
   type Agent,
   type AgentCron,
-  type PlaudIngest,
-  type CronRun,
   type AgentMessage,
   type AgentRun,
   type AgentTask,
@@ -52,22 +51,13 @@ import {
   type BroadcastReply,
   type ContactTag,
   type Department,
-  type Domain,
   type Metric,
-  type Persona,
   type Phase,
   type RoadmapItem,
   type SocialAccount,
   type SocialPlatform,
   type SocialSnapshot,
   type EmailListSnapshot,
-  type TradingAccountSnapshot,
-  type TradingPosition,
-  type TradeActivity,
-  type TradingLimits,
-  type TradeAnalysis,
-  type TradingOrder,
-  type Proposal,
   type SocialDm,
   type SocialDmSnapshot,
   type SocialDmMessage,
@@ -79,22 +69,17 @@ import {
   type Person,
   type SopTask,
   type Workflow,
+  type WorkflowVersion,
+  type ConfigVersion,
   type Skill,
   type Tool,
-  LeadMagnetSchema,
-  type LeadMagnet,
-  BrandDealSchema,
-  BrandDeal,
-  DeliverableDecisionSchema,
-  type DeliverableDecision,
+  BrandDealOverrideSchema,
+  type BrandDealOverride,
+  SetupCheckSchema,
+  type SetupCheck,
 } from '@/lib/schemas';
 
 const DDL = `
-CREATE TABLE IF NOT EXISTS seed_meta (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS departments (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -128,8 +113,7 @@ CREATE TABLE IF NOT EXISTS roadmap_items (
   quarter TEXT NOT NULL,
   status TEXT NOT NULL,
   department_id TEXT,
-  description TEXT NOT NULL DEFAULT '',
-  phase_id TEXT
+  description TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS metrics (
   id TEXT PRIMARY KEY,
@@ -139,28 +123,6 @@ CREATE TABLE IF NOT EXISTS metrics (
   unit TEXT NOT NULL DEFAULT '',
   delta REAL NOT NULL DEFAULT 0,
   period TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS domains (
-  id TEXT PRIMARY KEY,
-  number INTEGER NOT NULL,
-  title TEXT NOT NULL,
-  color TEXT NOT NULL,
-  items TEXT NOT NULL DEFAULT '[]'
-);
-CREATE TABLE IF NOT EXISTS personas (
-  id TEXT PRIMARY KEY,
-  ord INTEGER NOT NULL,
-  name TEXT NOT NULL,
-  archetype TEXT NOT NULL,
-  tagline TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  accent TEXT NOT NULL,
-  north_star TEXT NOT NULL,
-  pillars TEXT NOT NULL DEFAULT '[]',
-  connectors TEXT NOT NULL DEFAULT '[]',
-  metrics TEXT NOT NULL DEFAULT '[]',
-  brain_use TEXT NOT NULL,
-  signature_play TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS phases (
   id TEXT PRIMARY KEY,
@@ -184,125 +146,6 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   tool_calls TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS trading_snapshots (
-  account_id TEXT NOT NULL DEFAULT 'individual',
-  account_label TEXT NOT NULL DEFAULT 'Individual',
-  captured_at TEXT NOT NULL,
-  account_value_usd REAL NOT NULL,
-  buying_power_usd REAL NOT NULL,
-  cash_usd REAL NOT NULL,
-  day_pnl_usd REAL NOT NULL,
-  total_pnl_usd REAL NOT NULL,
-  source TEXT NOT NULL,
-  PRIMARY KEY (account_id, captured_at)
-);
-CREATE TABLE IF NOT EXISTS trading_positions (
-  account_id TEXT NOT NULL DEFAULT 'individual',
-  captured_at TEXT NOT NULL,
-  symbol TEXT NOT NULL,
-  quantity REAL NOT NULL,
-  avg_cost_usd REAL NOT NULL,
-  market_value_usd REAL NOT NULL,
-  unrealized_pnl_usd REAL NOT NULL,
-  PRIMARY KEY (account_id, captured_at, symbol)
-);
-CREATE TABLE IF NOT EXISTS proposals (
-  id TEXT PRIMARY KEY,
-  client TEXT NOT NULL,
-  brand TEXT NOT NULL,
-  url TEXT NOT NULL,
-  status TEXT NOT NULL,
-  amount_usd REAL,
-  notes TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL,
-  origin TEXT NOT NULL DEFAULT 'seed',
-  access_code TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS deliverable_decisions (
-  id TEXT PRIMARY KEY,
-  decision TEXT NOT NULL,
-  decided_at TEXT NOT NULL,
-  decided_revision TEXT NOT NULL DEFAULT '',
-  note TEXT NOT NULL DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS brand_deals (
-  id TEXT PRIMARY KEY,
-  brand TEXT NOT NULL,
-  status TEXT NOT NULL,
-  tier TEXT,
-  deal_value_usd REAL,
-  budget_usd REAL,
-  amount_agreed_usd REAL,
-  suggested_rate_usd REAL,
-  paid_in_full INTEGER NOT NULL DEFAULT 0,
-  deadline TEXT,
-  follow_up_date TEXT,
-  contact_name TEXT,
-  contact_email TEXT,
-  main_channel TEXT,
-  video_type TEXT,
-  source TEXT,
-  icp_fit TEXT,
-  notion_url TEXT NOT NULL,
-  last_edited TEXT NOT NULL,
-  seeded INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS trading_orders (
-  id TEXT PRIMARY KEY,
-  account_id TEXT NOT NULL DEFAULT 'agentic',
-  symbol TEXT NOT NULL,
-  side TEXT NOT NULL,
-  type TEXT NOT NULL,
-  state TEXT NOT NULL,
-  quantity REAL NOT NULL,
-  filled_quantity REAL NOT NULL DEFAULT 0,
-  dollar_amount_usd REAL,
-  limit_price_usd REAL,
-  placed_agent TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS trading_analysis (
-  id TEXT PRIMARY KEY,
-  at TEXT NOT NULL,
-  account_id TEXT NOT NULL DEFAULT 'agentic',
-  agent TEXT NOT NULL,
-  examined INTEGER NOT NULL DEFAULT 0,
-  signals INTEGER NOT NULL DEFAULT 0,
-  notes TEXT NOT NULL DEFAULT '',
-  rows TEXT NOT NULL DEFAULT '[]'
-);
-CREATE TABLE IF NOT EXISTS trading_activity (
-  id TEXT PRIMARY KEY,
-  at TEXT NOT NULL,
-  account_id TEXT NOT NULL DEFAULT 'individual',
-  agent TEXT NOT NULL,
-  action TEXT NOT NULL,
-  symbol TEXT NOT NULL,
-  quantity REAL NOT NULL,
-  price_usd REAL NOT NULL,
-  rationale TEXT NOT NULL DEFAULT '',
-  status TEXT NOT NULL
-);
--- The Markets Agent's guardrail limits, edited from /trading. Single row by
--- construction (the CHECK makes a second row impossible), so the agent can
--- never read one of two competing sets.
-CREATE TABLE IF NOT EXISTS trading_limits (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  max_notional_per_trade_usd REAL NOT NULL,
-  max_position_pct_of_sleeve REAL NOT NULL,
-  max_risk_pct_per_trade REAL NOT NULL,
-  max_concurrent_positions INTEGER NOT NULL,
-  max_trades_per_day INTEGER NOT NULL,
-  min_sleeve_value_usd REAL NOT NULL,
-  max_deployed_capital_usd REAL NOT NULL,
-  autopilot INTEGER NOT NULL DEFAULT 0,
-  updated_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS usage_snapshots (
-  id TEXT PRIMARY KEY,
-  captured_at TEXT NOT NULL,
-  payload TEXT NOT NULL
-);
 CREATE TABLE IF NOT EXISTS broadcasts (
   id TEXT PRIMARY KEY,
   message TEXT NOT NULL,
@@ -310,11 +153,17 @@ CREATE TABLE IF NOT EXISTS broadcasts (
 );
 CREATE TABLE IF NOT EXISTS agent_tasks (
   id TEXT PRIMARY KEY,
-  agent_id TEXT NOT NULL,
+  agent_id TEXT,
   title TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  detail TEXT NOT NULL DEFAULT '',
+  due_at TEXT,
+  priority TEXT NOT NULL DEFAULT 'normal',
+  owner_kind TEXT NOT NULL DEFAULT 'agent',
+  horizon TEXT,
+  run_id TEXT
 );
 CREATE TABLE IF NOT EXISTS agent_crons (
   id TEXT PRIMARY KEY,
@@ -323,36 +172,6 @@ CREATE TABLE IF NOT EXISTS agent_crons (
   description TEXT NOT NULL,
   enabled INTEGER NOT NULL,
   created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS cron_runs (
-  id TEXT PRIMARY KEY,
-  cron_id TEXT NOT NULL,
-  agent_id TEXT NOT NULL,
-  started_at TEXT NOT NULL,
-  finished_at TEXT,
-  ok INTEGER NOT NULL,
-  summary TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_cron_runs_cron ON cron_runs (cron_id, started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cron_runs_started ON cron_runs (started_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_started ON agent_runs (started_at DESC);
-CREATE TABLE IF NOT EXISTS digest_reads (
-  key TEXT PRIMARY KEY,
-  read_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS comms_digests (
-  id TEXT PRIMARY KEY,
-  generated_at TEXT NOT NULL,
-  payload TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS plaud_ingests (
-  file_id TEXT PRIMARY KEY,
-  title TEXT NOT NULL,
-  recorded_at TEXT NOT NULL,
-  ingested_at TEXT NOT NULL,
-  via TEXT NOT NULL,
-  slug TEXT NOT NULL,
-  claims INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS contact_tags (
   person TEXT NOT NULL,
@@ -386,12 +205,6 @@ CREATE TABLE IF NOT EXISTS email_list_snapshots (
   captured_at TEXT PRIMARY KEY,
   subscribers INTEGER NOT NULL,
   source TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS metric_snapshots (
-  metric_id TEXT NOT NULL,
-  captured_at TEXT NOT NULL,
-  value REAL NOT NULL,
-  PRIMARY KEY (metric_id, captured_at)
 );
 CREATE TABLE IF NOT EXISTS social_dms (
   platform TEXT PRIMARY KEY,
@@ -443,19 +256,6 @@ CREATE TABLE IF NOT EXISTS sop_tasks (
   assignee_kind TEXT NOT NULL,
   assignee_id TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS lead_magnets (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  offer TEXT NOT NULL DEFAULT '',
-  url TEXT NOT NULL,
-  status TEXT NOT NULL,
-  captures TEXT NOT NULL,
-  destination TEXT NOT NULL DEFAULT '',
-  source TEXT NOT NULL DEFAULT '',
-  launched_at TEXT NOT NULL,
-  notes TEXT NOT NULL DEFAULT '',
-  origin TEXT NOT NULL DEFAULT 'seed'
-);
 CREATE TABLE IF NOT EXISTS funnel_contacts (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -502,29 +302,961 @@ CREATE TABLE IF NOT EXISTS skills (
   markdown TEXT NOT NULL DEFAULT '',
   ord INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS setup_checks (
+  id TEXT PRIMARY KEY,
+  done_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS brand_deal_overrides (
+  deal_id TEXT PRIMARY KEY,
+  outcome TEXT NOT NULL DEFAULT 'open',
+  amount_usd INTEGER,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS workflow_versions (
+  id TEXT PRIMARY KEY,
+  workflow_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  snapshot TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS workflow_versions_wf ON workflow_versions (workflow_id, version);
+CREATE TABLE IF NOT EXISTS config_versions (
+  id TEXT PRIMARY KEY,
+  target TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  note TEXT NOT NULL DEFAULT '',
+  snapshot TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS config_versions_target ON config_versions (target, version);
 `;
 
-/** Databases created before the hierarchy build lack these columns. */
-/** lead_magnets gained `origin` when the operator started creating them from the
- *  OS; older databases predate the column. */
-function migrateLeadMagnetsTable(db: InstanceType<typeof Database>): void {
-  const columns = new Set(
-    (db.prepare('PRAGMA table_info(lead_magnets)').all() as { name: string }[]).map((c) => c.name),
-  );
-  if (!columns.has('origin')) db.exec("ALTER TABLE lead_magnets ADD COLUMN origin TEXT NOT NULL DEFAULT 'seed'");
+/* ── FounderOS UI merge tables (docs/projects/founderos-ui/SPEC.md §2.2, SCAFFOLD §2) ──
+   Additive only: CREATE … IF NOT EXISTS, so opening an older database IS the migration
+   (migrateFounderOs below). Read and written through the repos in lib/db-ext/*; zod
+   schemas in lib/schemas.ts (fo/data block). None is seeded: a fresh install has no row
+   in any of them (AC-11). Chats has no table: it reads agent_messages. */
+export const FO_DDL = `
+CREATE TABLE IF NOT EXISTS trading_snapshots (
+  account_id TEXT NOT NULL,
+  account_label TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  account_value_usd REAL NOT NULL,
+  buying_power_usd REAL NOT NULL,
+  cash_usd REAL NOT NULL,
+  day_pnl_usd REAL NOT NULL,
+  total_pnl_usd REAL NOT NULL,
+  source TEXT NOT NULL,
+  PRIMARY KEY (account_id, captured_at)
+);
+CREATE TABLE IF NOT EXISTS trading_positions (
+  account_id TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  avg_cost_usd REAL NOT NULL,
+  market_value_usd REAL NOT NULL,
+  unrealized_pnl_usd REAL NOT NULL,
+  PRIMARY KEY (account_id, captured_at, symbol)
+);
+CREATE TABLE IF NOT EXISTS trading_activity (
+  id TEXT PRIMARY KEY,
+  at TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  action TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  price_usd REAL NOT NULL,
+  rationale TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS trading_activity_by_at ON trading_activity (at);
+CREATE TABLE IF NOT EXISTS trading_analysis (
+  id TEXT PRIMARY KEY,
+  at TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  agent TEXT NOT NULL,
+  examined INTEGER NOT NULL DEFAULT 0,
+  signals INTEGER NOT NULL DEFAULT 0,
+  notes TEXT NOT NULL DEFAULT '',
+  rows_json TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS trading_orders (
+  id TEXT PRIMARY KEY,
+  account_id TEXT NOT NULL,
+  symbol TEXT NOT NULL,
+  side TEXT NOT NULL,
+  type TEXT NOT NULL,
+  state TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  filled_quantity REAL NOT NULL DEFAULT 0,
+  dollar_amount_usd REAL,
+  limit_price_usd REAL,
+  placed_agent TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+-- one row by construction, so an agent can never read one of two sets
+CREATE TABLE IF NOT EXISTS trading_limits (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  max_deployed_capital_usd REAL NOT NULL,
+  max_notional_per_trade_usd REAL NOT NULL,
+  max_position_pct_of_sleeve REAL NOT NULL,
+  max_risk_pct_per_trade REAL NOT NULL,
+  max_concurrent_positions INTEGER NOT NULL,
+  max_trades_per_day INTEGER NOT NULL,
+  min_sleeve_value_usd REAL NOT NULL,
+  autopilot INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS client_confirmations (
+  client_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  company TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL,
+  retainer INTEGER NOT NULL DEFAULT 0,
+  slack_channel TEXT,
+  superset_project TEXT,
+  confirmed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS client_work (
+  id TEXT PRIMARY KEY,
+  client_id TEXT NOT NULL,
+  brief TEXT NOT NULL,
+  status TEXT NOT NULL,
+  superset_workspace TEXT,
+  created_at TEXT NOT NULL,
+  finished_at TEXT,
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS client_work_by_client ON client_work (client_id, created_at);
+CREATE TABLE IF NOT EXISTS lead_magnets (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  offer TEXT NOT NULL DEFAULT '',
+  live_url TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  campaign TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL,
+  went_live_at TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS usage_readings (
+  machine TEXT NOT NULL,
+  plan TEXT NOT NULL,
+  day TEXT NOT NULL,
+  model TEXT NOT NULL,
+  input INTEGER NOT NULL DEFAULT 0,
+  output INTEGER NOT NULL DEFAULT 0,
+  cache_write INTEGER NOT NULL DEFAULT 0,
+  pushed_at TEXT NOT NULL,
+  PRIMARY KEY (machine, plan, day, model)
+);
+CREATE TABLE IF NOT EXISTS comms_digests (
+  id TEXT PRIMARY KEY,
+  date TEXT NOT NULL,
+  body_json TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS digest_reads (
+  digest_id TEXT NOT NULL,
+  entry_key TEXT NOT NULL DEFAULT '',
+  read_at TEXT NOT NULL,
+  PRIMARY KEY (digest_id, entry_key)
+);
+CREATE TABLE IF NOT EXISTS call_recordings (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  duration_s INTEGER,
+  participants_json TEXT NOT NULL DEFAULT '[]',
+  summary TEXT NOT NULL DEFAULT '',
+  transcript_url TEXT,
+  UNIQUE (source, external_id)
+);
+CREATE TABLE IF NOT EXISTS deliverable_decisions (
+  run_id TEXT PRIMARY KEY,
+  decision TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cron_runs (
+  id TEXT PRIMARY KEY,
+  cron_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  summary TEXT NOT NULL DEFAULT '',
+  trigger TEXT NOT NULL DEFAULT 'schedule'
+);
+CREATE INDEX IF NOT EXISTS cron_runs_by_cron ON cron_runs (cron_id, started_at);
+`;
+
+/** Every table FO_DDL creates (tests assert each exists and starts empty). */
+export const FO_TABLES = [
+  'trading_snapshots', 'trading_positions', 'trading_activity', 'trading_analysis', 'trading_orders', 'trading_limits',
+  'client_confirmations', 'client_work', 'lead_magnets', 'usage_readings', 'comms_digests', 'digest_reads',
+  'call_recordings', 'deliverable_decisions', 'cron_runs',
+] as const;
+
+/**
+ * Bring an existing database up to the FounderOS-merge schema. Idempotent:
+ * every statement is IF NOT EXISTS, and a cron_runs table made by the
+ * 2026-10-06 parts bin (no `trigger` column) gains it in place.
+ */
+export function migrateFounderOs(db: InstanceType<typeof Database>): void {
+  // The parts bin's digest tables had another shape (payload / key). Keep any such rows
+  // under *_v0 rather than dropping them, then create the current shape.
+  const colsOf = (t: string) => (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name);
+  for (const [table, mustHave] of [['comms_digests', 'body_json'], ['digest_reads', 'digest_id']] as const) {
+    const cols = colsOf(table);
+    if (cols.length > 0 && !cols.includes(mustHave) && colsOf(`${table}_v0`).length === 0) {
+      db.exec(`ALTER TABLE ${table} RENAME TO ${table}_v0`);
+    }
+  }
+  db.exec(FO_DDL);
+  const cols = (db.prepare('PRAGMA table_info(cron_runs)').all() as { name: string }[]).map((c) => c.name);
+  if (!cols.includes('trigger')) db.exec("ALTER TABLE cron_runs ADD COLUMN trigger TEXT NOT NULL DEFAULT 'schedule'");
 }
 
-/** proposals gained `access_code` once each client's gate code needed to
- *  show beside their name; databases created before that predate the column. */
-export function migrateProposalsTable(db: InstanceType<typeof Database>): void {
-  const columns = new Set(
-    (db.prepare('PRAGMA table_info(proposals)').all() as { name: string }[]).map((c) => c.name),
-  );
-  if (!columns.has('access_code')) {
-    db.exec("ALTER TABLE proposals ADD COLUMN access_code TEXT NOT NULL DEFAULT ''");
+/* ── Content Lab tables (docs/projects/content-lab/SPEC.md §6, CONTRACT.md) ──────────
+   Additive only: CREATE … IF NOT EXISTS, never altered in place. Read and written
+   through lib/lab/store.ts (labStore); nothing else touches lab_* directly. Measures,
+   profiles and trend snapshots are derived and can be rebuilt from posts, metrics and
+   dissections. Exported so the sample preview can build the same schema in memory. */
+/* ── Content Lab v2 tables (S0; docs/projects/content-lab/v2/SPEC.md 3.4, 08.11.2) ──────────
+   Appended to LAB_DDL below. Additive only (CREATE ... IF NOT EXISTS). Each table names its
+   DDL owner section. Columns added to v1 tables are NOT here: they are LAB_V2_COLUMNS, applied
+   by the one migrateLabV2 (indexes on those columns are created there too, after the column). */
+export const LAB_V2_DDL = `
+-- 04 section 8
+CREATE TABLE IF NOT EXISTS lab_controls (
+  post_id TEXT PRIMARY KEY,
+  role TEXT NOT NULL,
+  stratum TEXT NOT NULL,
+  sampling_prob REAL NOT NULL,
+  eligible_n INTEGER NOT NULL DEFAULT 0,
+  drawn_n INTEGER NOT NULL DEFAULT 0,
+  seed TEXT NOT NULL,
+  verdict_age_h REAL NOT NULL,
+  verdict_ratio REAL,
+  drawn_at TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'selected',
+  measure_version TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lab_controls_stratum ON lab_controls (stratum);
+-- 05 section 16
+CREATE TABLE IF NOT EXISTS lab_events (
+  id TEXT PRIMARY KEY,
+  key TEXT NOT NULL,
+  name TEXT NOT NULL,
+  vendor TEXT,
+  aliases_json TEXT NOT NULL DEFAULT '[]',
+  status TEXT NOT NULL DEFAULT 'candidate',
+  merged_into TEXT,
+  dismiss_reason TEXT,
+  novelty TEXT,
+  novelty_source TEXT,
+  class TEXT NOT NULL DEFAULT 'unknown',
+  class_basis TEXT,
+  class_json TEXT NOT NULL DEFAULT '{}',
+  wiki_article TEXT,
+  attention_json TEXT NOT NULL DEFAULT '[]',
+  t0 TEXT,
+  t0_rule TEXT,
+  t0_ping_id TEXT,
+  t0_revised_at TEXT,
+  confirmed_at TEXT,
+  first_seen_at TEXT NOT NULL,
+  source_count INTEGER NOT NULL DEFAULT 0,
+  sources_json TEXT NOT NULL DEFAULT '[]',
+  wave_n INTEGER NOT NULL DEFAULT 1,
+  wave_started_at TEXT,
+  window_state TEXT,
+  window_opens_at TEXT,
+  window_closing_at TEXT,
+  window_closes_at TEXT,
+  window_changed_at TEXT,
+  window_reason TEXT,
+  window_log_json TEXT NOT NULL DEFAULT '[]',
+  cluster_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS lab_events_key ON lab_events (key) WHERE status NOT IN ('merged','dismissed');
+CREATE INDEX IF NOT EXISTS lab_events_state ON lab_events (status, window_state, t0);
+CREATE TABLE IF NOT EXISTS lab_event_pings (
+  id TEXT PRIMARY KEY,
+  source TEXT NOT NULL,
+  family TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  event_id TEXT,
+  match_rule TEXT,
+  name TEXT,
+  name_key TEXT,
+  title TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL DEFAULT '',
+  author TEXT,
+  vendor TEXT,
+  source_time TEXT,
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  prev_seen_at TEXT,
+  metric_first REAL,
+  metric_prev REAL,
+  metric_last REAL,
+  rank INTEGER,
+  velocity_per_h REAL,
+  robust_z REAL,
+  is_launch INTEGER NOT NULL DEFAULT 0,
+  is_baseline INTEGER NOT NULL DEFAULT 0,
+  qualifies INTEGER NOT NULL DEFAULT 0,
+  qualify_reason TEXT,
+  fake_star INTEGER,
+  fake_star_json TEXT,
+  lexicon INTEGER NOT NULL DEFAULT 0,
+  dry INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS lab_event_pings_event ON lab_event_pings (event_id, first_seen_at);
+CREATE INDEX IF NOT EXISTS lab_event_pings_source ON lab_event_pings (source, first_seen_at);
+CREATE TABLE IF NOT EXISTS lab_event_coverage (
+  event_id TEXT NOT NULL,
+  post_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  is_owned INTEGER NOT NULL DEFAULT 0,
+  posted_at TEXT NOT NULL,
+  hours_since_t0 REAL NOT NULL,
+  wave_n INTEGER NOT NULL DEFAULT 1,
+  wave_position TEXT NOT NULL,
+  creator_rank INTEGER,
+  match_rule TEXT NOT NULL,
+  confidence TEXT NOT NULL,
+  confirmed INTEGER,
+  angle TEXT NOT NULL DEFAULT 'other',
+  angle_source TEXT NOT NULL DEFAULT 'rule',
+  ratio REAL,
+  ratio_age_h REAL,
+  is_breakout INTEGER NOT NULL DEFAULT 0,
+  computed_at TEXT NOT NULL,
+  PRIMARY KEY (event_id, post_id)
+);
+CREATE INDEX IF NOT EXISTS lab_event_coverage_post ON lab_event_coverage (post_id);
+CREATE TABLE IF NOT EXISTS lab_brief (
+  id TEXT PRIMARY KEY,
+  day TEXT NOT NULL UNIQUE,
+  composed_at TEXT NOT NULL,
+  items_json TEXT NOT NULL DEFAULT '[]',
+  dedupe_keys_json TEXT NOT NULL DEFAULT '[]',
+  text TEXT NOT NULL DEFAULT '',
+  sent_at TEXT,
+  sent_via TEXT,
+  send_error TEXT,
+  dry INTEGER NOT NULL DEFAULT 0
+);
+-- 06 section 12
+CREATE TABLE IF NOT EXISTS lab_predictions (
+  id TEXT PRIMARY KEY,
+  origin TEXT NOT NULL,
+  predictor TEXT NOT NULL,
+  predictor_version TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  script_id TEXT,
+  script_version INTEGER,
+  post_id TEXT,
+  source_id TEXT,
+  platform TEXT,
+  surface TEXT,
+  ref_age_h REAL,
+  as_of TEXT NOT NULL,
+  frozen_at TEXT NOT NULL,
+  backtest_origin TEXT,
+  band TEXT,
+  score REAL,
+  ratio_point REAL, ratio_lo REAL, ratio_hi REAL,
+  views_point REAL, views_lo REAL, views_hi REAL,
+  p_breakout REAL,
+  interval_level REAL,
+  baseline_7d_views REAL,
+  baseline_n INTEGER,
+  inputs_json TEXT NOT NULL DEFAULT '{}',
+  note TEXT NOT NULL DEFAULT '',
+  payload_sha256 TEXT NOT NULL,
+  late INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'frozen',
+  void_reason TEXT,
+  voided_at TEXT,
+  outcome_views_7d REAL,
+  outcome_ratio_7d REAL,
+  outcome_band TEXT,
+  outcome_is_breakout INTEGER,
+  outcome_method TEXT,
+  hit_band INTEGER,
+  in_interval INTEGER,
+  abs_log_err REAL,
+  test_id TEXT,
+  pair_right INTEGER,
+  graded_at TEXT,
+  dry INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS lab_predictions_post ON lab_predictions (post_id);
+CREATE INDEX IF NOT EXISTS lab_predictions_pred ON lab_predictions (predictor, origin, status);
+CREATE INDEX IF NOT EXISTS lab_predictions_origin ON lab_predictions (origin, backtest_origin);
+CREATE UNIQUE INDEX IF NOT EXISTS lab_predictions_live_prepost ON lab_predictions (predictor, script_id)
+  WHERE origin = 'live' AND kind = 'pre_post' AND script_id IS NOT NULL AND status <> 'void';
+CREATE UNIQUE INDEX IF NOT EXISTS lab_predictions_live_prepost_post ON lab_predictions (predictor, post_id)
+  WHERE origin = 'live' AND kind = 'pre_post' AND script_id IS NULL AND status <> 'void';
+CREATE UNIQUE INDEX IF NOT EXISTS lab_predictions_live_early ON lab_predictions (predictor, post_id, ref_age_h)
+  WHERE origin = 'live' AND kind = 'early' AND predictor <> 'comment_intent';
+CREATE UNIQUE INDEX IF NOT EXISTS lab_predictions_live_ci ON lab_predictions (post_id)
+  WHERE origin = 'live' AND predictor = 'comment_intent';
+CREATE TABLE IF NOT EXISTS lab_evals (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  predictor TEXT NOT NULL,
+  predictor_version TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  population TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  window_weeks INTEGER NOT NULL,
+  computed_date TEXT NOT NULL,
+  computed_at TEXT NOT NULL,
+  harness_version TEXT NOT NULL,
+  origins INTEGER NOT NULL DEFAULT 0,
+  n_posts INTEGER NOT NULL DEFAULT 0,
+  n_creators INTEGER NOT NULL DEFAULT 0,
+  abstained INTEGER NOT NULL DEFAULT 0,
+  n_pairs INTEGER NOT NULL DEFAULT 0,
+  pairwise REAL, pairwise_lo REAL, pairwise_hi REAL,
+  spearman REAL, spearman_lo REAL, spearman_hi REAL,
+  log_mae REAL, log_mae_baseline REAL, mae_delta_lo REAL, mae_delta_hi REAL,
+  coverage REAL, coverage_lo REAL, coverage_hi REAL, coverage_n INTEGER NOT NULL DEFAULT 0,
+  pr_auc REAL, pr_auc_lo REAL, pr_auc_hi REAL, base_rate REAL, positives INTEGER NOT NULL DEFAULT 0,
+  band_hits_json TEXT NOT NULL DEFAULT '{}',
+  verdict_forecast TEXT, verdict_ranking TEXT, verdict_classifier TEXT,
+  dry INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX IF NOT EXISTS lab_evals_key ON lab_evals (predictor, scope, population, platform, window_weeks, computed_date, dry);
+CREATE TABLE IF NOT EXISTS lab_retention (
+  post_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  source TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  age_h REAL NOT NULL,
+  partial INTEGER NOT NULL DEFAULT 0,
+  curve_json TEXT,
+  views INTEGER,
+  avg_view_duration_s REAL,
+  avg_view_pct REAL,
+  reach INTEGER,
+  likes INTEGER,
+  comments INTEGER,
+  saved INTEGER,
+  shares INTEGER,
+  total_interactions INTEGER,
+  avg_watch_time_ms REAL,
+  total_watch_time_ms REAL,
+  skip_rate REAL,
+  raw_json TEXT NOT NULL DEFAULT '{}',
+  dry INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (post_id, captured_at)
+);
+CREATE INDEX IF NOT EXISTS lab_retention_post ON lab_retention (post_id, age_h);
+CREATE TABLE IF NOT EXISTS lab_tests (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  title TEXT NOT NULL,
+  hypothesis TEXT NOT NULL DEFAULT '',
+  variable TEXT NOT NULL,
+  feature_key TEXT,
+  expected_sign INTEGER,
+  script_id TEXT,
+  platform TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'planned',
+  arms_json TEXT NOT NULL DEFAULT '[]',
+  judge_age_h REAL,
+  primary_metric TEXT NOT NULL,
+  result TEXT,
+  winner_arm TEXT,
+  observed_sign INTEGER,
+  confirms INTEGER,
+  judge_detail_json TEXT NOT NULL DEFAULT '{}',
+  notes TEXT NOT NULL DEFAULT '',
+  plan_week TEXT,
+  started_at TEXT,
+  judged_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  dry INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS lab_tests_kind ON lab_tests (kind, status);
+CREATE INDEX IF NOT EXISTS lab_tests_feature ON lab_tests (feature_key);
+-- 07 7.11, 7.13.3
+CREATE TABLE IF NOT EXISTS lab_embeddings (
+  subject_kind TEXT NOT NULL,
+  subject_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dim INTEGER NOT NULL,
+  text_hash TEXT NOT NULL,
+  vec BLOB NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (subject_kind, subject_id, model)
+);
+CREATE INDEX IF NOT EXISTS lab_embeddings_kind_model ON lab_embeddings (subject_kind, model);
+CREATE TABLE IF NOT EXISTS lab_comments (
+  id TEXT PRIMARY KEY,
+  post_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  author_hash TEXT NOT NULL,
+  text TEXT NOT NULL,
+  likes INTEGER,
+  replies INTEGER,
+  is_reply INTEGER NOT NULL DEFAULT 0,
+  by_creator INTEGER NOT NULL DEFAULT 0,
+  creator_heart INTEGER,
+  posted_at TEXT,
+  captured_at TEXT NOT NULL,
+  intent TEXT NOT NULL,
+  intent_rule TEXT,
+  run_id TEXT
+);
+CREATE INDEX IF NOT EXISTS lab_comments_post ON lab_comments (post_id);
+CREATE INDEX IF NOT EXISTS lab_comments_author ON lab_comments (author_hash);
+-- 09 09.6
+CREATE TABLE IF NOT EXISTS lab_forecasts (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  frozen_at TEXT NOT NULL,
+  inputs_json TEXT NOT NULL,
+  predicted REAL NOT NULL,
+  lo REAL, hi REAL,
+  expected_items INTEGER,
+  actual REAL,
+  actual_items INTEGER,
+  status TEXT NOT NULL DEFAULT 'open',
+  graded_at TEXT,
+  dry INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS lab_forecasts_kind ON lab_forecasts (kind, frozen_at);
+CREATE INDEX IF NOT EXISTS lab_forecasts_subject ON lab_forecasts (subject);
+`;
+
+/** 06 2.4(b): a live prediction's frozen fields, post link and grade are written once; live non-dry rows are never deleted. Applied after the tables (part of LAB_DDL). */
+export const LEDGER_TRIGGERS_DDL = `
+CREATE TRIGGER IF NOT EXISTS lab_predictions_frozen_cols
+BEFORE UPDATE OF id, origin, predictor, predictor_version, kind, script_id, script_version, source_id, platform, surface,
+  ref_age_h, as_of, frozen_at, backtest_origin, band, score, ratio_point, ratio_lo, ratio_hi, views_point,
+  views_lo, views_hi, p_breakout, interval_level, baseline_7d_views, baseline_n, inputs_json, note, payload_sha256
+ON lab_predictions WHEN OLD.origin = 'live'
+BEGIN SELECT RAISE(ABORT, 'lab_predictions: frozen fields are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS lab_predictions_post_once
+BEFORE UPDATE OF post_id, late ON lab_predictions
+WHEN OLD.origin = 'live' AND OLD.post_id IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'lab_predictions: post link is set once'); END;
+CREATE TRIGGER IF NOT EXISTS lab_predictions_grade_once
+BEFORE UPDATE OF outcome_views_7d, outcome_ratio_7d, outcome_band, outcome_is_breakout, outcome_method,
+  hit_band, in_interval, abs_log_err, test_id, pair_right, graded_at
+ON lab_predictions WHEN OLD.origin = 'live' AND OLD.graded_at IS NOT NULL
+BEGIN SELECT RAISE(ABORT, 'lab_predictions: a grade is written once'); END;
+CREATE TRIGGER IF NOT EXISTS lab_predictions_status_flow
+BEFORE UPDATE OF status ON lab_predictions
+WHEN OLD.origin = 'live' AND NOT (
+  (OLD.status = 'frozen' AND NEW.status IN ('frozen','graded','ungradable','void')) OR
+  (OLD.status IN ('graded','ungradable') AND NEW.status IN (OLD.status,'void')) OR
+  (OLD.status = 'void' AND NEW.status = 'void'))
+BEGIN SELECT RAISE(ABORT, 'lab_predictions: illegal status change'); END;
+CREATE TRIGGER IF NOT EXISTS lab_predictions_no_delete
+BEFORE DELETE ON lab_predictions WHEN OLD.origin = 'live' AND OLD.dry = 0
+BEGIN SELECT RAISE(ABORT, 'lab_predictions: live predictions are never deleted'); END;
+`;
+
+/** 09.6 lab_forecasts_lock: no UPDATE once a row is graded or void; a late row may be updated once, to graded. */
+export const LAB_FORECASTS_TRIGGER_DDL = `
+CREATE TRIGGER IF NOT EXISTS lab_forecasts_lock
+BEFORE UPDATE ON lab_forecasts
+WHEN OLD.status IN ('graded','void') OR (OLD.status = 'late' AND NEW.status <> 'graded')
+BEGIN SELECT RAISE(ABORT, 'lab_forecasts: a graded forecast is immutable'); END;
+`;
+/* ── end Content Lab v2 tables ── */
+
+export const LAB_DDL = `
+CREATE TABLE IF NOT EXISTS lab_sources (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  handle TEXT NOT NULL,
+  url TEXT,
+  display_name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active',
+  added_at TEXT NOT NULL,
+  reason TEXT,
+  score REAL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS lab_sources_handle ON lab_sources (platform, handle);
+CREATE TABLE IF NOT EXISTS lab_creator_snapshots (
+  source_id TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  followers INTEGER,
+  following INTEGER,
+  post_count INTEGER
+);
+CREATE INDEX IF NOT EXISTS lab_creator_snapshots_source ON lab_creator_snapshots (source_id, captured_at);
+CREATE TABLE IF NOT EXISTS lab_posts (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  url TEXT NOT NULL,
+  posted_at TEXT,
+  caption TEXT NOT NULL DEFAULT '',
+  content_type TEXT NOT NULL DEFAULT 'video',
+  thumbnail_url TEXT,
+  media_url TEXT,
+  duration_s REAL,
+  is_owned INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (platform, external_id)
+);
+CREATE INDEX IF NOT EXISTS lab_posts_source ON lab_posts (source_id, posted_at);
+CREATE TABLE IF NOT EXISTS lab_post_metrics (
+  post_id TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  views INTEGER,
+  likes INTEGER,
+  comments INTEGER,
+  shares INTEGER,
+  saves INTEGER
+);
+CREATE INDEX IF NOT EXISTS lab_post_metrics_post ON lab_post_metrics (post_id, captured_at);
+CREATE TABLE IF NOT EXISTS lab_transcripts (
+  post_id TEXT PRIMARY KEY,
+  text TEXT NOT NULL DEFAULT '',
+  word_count INTEGER NOT NULL DEFAULT 0,
+  wpm REAL,
+  provider TEXT NOT NULL DEFAULT '',
+  cost_usd REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'none'
+);
+CREATE TABLE IF NOT EXISTS lab_dissections (
+  post_id TEXT PRIMARY KEY,
+  format TEXT NOT NULL,
+  hook_form TEXT NOT NULL,
+  emotional_trigger TEXT NOT NULL,
+  hook_channel TEXT NOT NULL,
+  hook_text TEXT NOT NULL DEFAULT '',
+  first_frame_text TEXT NOT NULL DEFAULT '',
+  structure_type TEXT NOT NULL,
+  beats_json TEXT NOT NULL DEFAULT '[]',
+  pacing TEXT NOT NULL,
+  pillar TEXT NOT NULL,
+  cta_type TEXT NOT NULL,
+  tension_json TEXT,
+  confidences_json TEXT NOT NULL DEFAULT '{}',
+  quality_notes TEXT NOT NULL DEFAULT '',
+  model_id TEXT NOT NULL,
+  prompt_version TEXT NOT NULL,
+  analysed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lab_post_topics (
+  post_id TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  angle TEXT NOT NULL DEFAULT '',
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  cluster_id TEXT,
+  embedding BLOB
+);
+CREATE INDEX IF NOT EXISTS lab_post_topics_post ON lab_post_topics (post_id);
+CREATE INDEX IF NOT EXISTS lab_post_topics_cluster ON lab_post_topics (cluster_id);
+CREATE TABLE IF NOT EXISTS lab_measures (
+  post_id TEXT PRIMARY KEY,
+  depth REAL,
+  breakout REAL,
+  breakout_lo REAL,
+  breakout_hi REAL,
+  baseline_n INTEGER NOT NULL DEFAULT 0,
+  baseline_confidence TEXT NOT NULL DEFAULT 'low',
+  reach REAL,
+  velocity REAL,
+  trajectory TEXT,
+  quadrant TEXT,
+  is_breakout INTEGER NOT NULL DEFAULT 0,
+  computed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lab_clusters (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  centroid BLOB,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lab_trend_snapshots (
+  cluster_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  posts INTEGER NOT NULL DEFAULT 0,
+  breakouts INTEGER NOT NULL DEFAULT 0,
+  creators INTEGER NOT NULL DEFAULT 0,
+  platforms INTEGER NOT NULL DEFAULT 0,
+  feed_mentions INTEGER NOT NULL DEFAULT 0,
+  source_count INTEGER NOT NULL DEFAULT 0,
+  momentum REAL,
+  timing TEXT,
+  PRIMARY KEY (cluster_id, day)
+);
+CREATE TABLE IF NOT EXISTS lab_trend_items (
+  id TEXT PRIMARY KEY,
+  feed TEXT NOT NULL,
+  url TEXT NOT NULL,
+  title TEXT NOT NULL,
+  score REAL,
+  comments INTEGER,
+  sources_json TEXT NOT NULL DEFAULT '[]',
+  source_count INTEGER NOT NULL DEFAULT 1,
+  cluster_id TEXT,
+  seen_at TEXT NOT NULL,
+  acted_on_at TEXT
+);
+CREATE TABLE IF NOT EXISTS lab_profiles (
+  id TEXT PRIMARY KEY,
+  format_family TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  version INTEGER NOT NULL,
+  window_days INTEGER NOT NULL DEFAULT 90,
+  posts_n INTEGER NOT NULL DEFAULT 0,
+  breakouts_n INTEGER NOT NULL DEFAULT 0,
+  features_json TEXT NOT NULL DEFAULT '[]',
+  strand_json TEXT NOT NULL DEFAULT '[]',
+  stats_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lab_profiles_family ON lab_profiles (format_family, version);
+CREATE TABLE IF NOT EXISTS lab_ideas (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  cluster_id TEXT,
+  angle TEXT NOT NULL DEFAULT '',
+  tension_json TEXT,
+  format_family TEXT NOT NULL,
+  strand_json TEXT NOT NULL DEFAULT '[]',
+  hook_recs_json TEXT NOT NULL DEFAULT '[]',
+  evidence_json TEXT NOT NULL DEFAULT '[]',
+  timing TEXT,
+  fit REAL NOT NULL DEFAULT 0,
+  thin INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'open',
+  dismiss_reason TEXT,
+  created_at TEXT NOT NULL,
+  acted_on_at TEXT
+);
+CREATE TABLE IF NOT EXISTS lab_scripts (
+  id TEXT PRIMARY KEY,
+  idea_id TEXT,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'draft',
+  published_post_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lab_script_versions (
+  script_id TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  body_json TEXT NOT NULL,
+  gate_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  edit_diff TEXT,
+  PRIMARY KEY (script_id, version)
+);
+CREATE TABLE IF NOT EXISTS lab_outcomes (
+  script_id TEXT NOT NULL,
+  post_id TEXT NOT NULL,
+  captured_at TEXT NOT NULL,
+  breakout REAL,
+  depth REAL
+);
+CREATE TABLE IF NOT EXISTS lab_priors (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  n INTEGER NOT NULL DEFAULT 0,
+  supersedes_default INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lab_runs (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  apify_run_id TEXT,
+  dataset_id TEXT,
+  actor TEXT,
+  input_json TEXT NOT NULL DEFAULT '{}',
+  status TEXT NOT NULL,
+  items INTEGER,
+  cost_usd REAL,
+  dry INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  error TEXT
+);
+CREATE INDEX IF NOT EXISTS lab_runs_started ON lab_runs (started_at);
+CREATE TABLE IF NOT EXISTS lab_spend (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id TEXT,
+  provider TEXT NOT NULL,
+  units REAL NOT NULL DEFAULT 0,
+  est_usd REAL,
+  actual_usd REAL,
+  dry INTEGER NOT NULL DEFAULT 0,
+  at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lab_spend_at ON lab_spend (provider, at);
+${LAB_V2_DDL}${LEDGER_TRIGGERS_DDL}${LAB_FORECASTS_TRIGGER_DDL}`;
+/* ── end Content Lab tables ── */
+
+/* ── Content Lab v2 migration (S0; 08.11.2). The ONLY migrateLabV2 and the ONLY place a
+   v1 lab table gains a column. A section that needs another column adds a row here. ── */
+
+/** Raised when a schema change ships; lab_meta_version() must equal it (health `db.schema`). */
+export const LAB_SCHEMA_VERSION = 2;
+
+/** Every column v2 adds to a v1 lab table, one list for all sections (owner = spec section). */
+export const LAB_V2_COLUMNS: { table: string; column: string; ddl: string; owner: '04' | '05' | '07' | '08' | '09' }[] = [
+  // 04 section 8
+  { table: 'lab_post_metrics', column: 'age_h', ddl: 'REAL', owner: '04' },
+  { table: 'lab_post_metrics', column: 'target_age_h', ddl: 'REAL', owner: '04' },
+  { table: 'lab_post_metrics', column: 'read_kind', ddl: "TEXT NOT NULL DEFAULT 'cycle'", owner: '04' },
+  { table: 'lab_post_metrics', column: 'quotes', ddl: 'INTEGER', owner: '04' },
+  { table: 'lab_posts', column: 'epoch', ddl: "TEXT NOT NULL DEFAULT 'current'", owner: '04' },
+  { table: 'lab_posts', column: 'exo_reason', ddl: 'TEXT', owner: '04' },
+  { table: 'lab_posts', column: 'exo_note', ddl: 'TEXT', owner: '04' },
+  { table: 'lab_posts', column: 'exo_at', ddl: 'TEXT', owner: '04' },
+  { table: 'lab_measures', column: 'measure_version', ddl: "TEXT NOT NULL DEFAULT 'measure-v1'", owner: '04' },
+  { table: 'lab_measures', column: 'metric_basis', ddl: "TEXT NOT NULL DEFAULT 'views'", owner: '04' },
+  { table: 'lab_measures', column: 'judged_age_h', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'basis_at_age', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'baseline_log', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'baseline_var', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'prior_log', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'shrink_b', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'baseline_source', ddl: 'TEXT', owner: '04' },
+  { table: 'lab_measures', column: 'robust_z', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'volatility', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'volatility_class', ddl: 'TEXT', owner: '04' },
+  { table: 'lab_measures', column: 'max_over_median', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'niche_ratio', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'dual_high', ddl: 'INTEGER NOT NULL DEFAULT 0', owner: '04' },
+  { table: 'lab_measures', column: 'trajectory_class', ddl: 'TEXT', owner: '04' },
+  { table: 'lab_measures', column: 'peak_day_share', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'exo_auto', ddl: 'INTEGER NOT NULL DEFAULT 0', owner: '04' },
+  { table: 'lab_measures', column: 'shares_per_view', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'saves_per_view', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'x_action_score', ddl: 'REAL', owner: '04' },
+  { table: 'lab_measures', column: 'followers_as_of', ddl: 'TEXT', owner: '04' },
+  { table: 'lab_measures', column: 'ages_json', ddl: "TEXT NOT NULL DEFAULT '{}'", owner: '04' },
+  { table: 'lab_profiles', column: 'method', ddl: "TEXT NOT NULL DEFAULT 'lift_wilson_v1'", owner: '04' },
+  { table: 'lab_profiles', column: 'controls_n', ddl: 'INTEGER NOT NULL DEFAULT 0', owner: '04' },
+  { table: 'lab_profiles', column: 'fdr_q', ddl: 'REAL', owner: '04' },
+  // 05 section 16
+  { table: 'lab_ideas', column: 'event_id', ddl: 'TEXT', owner: '05' },
+  { table: 'lab_ideas', column: 'launch_angle', ddl: 'TEXT', owner: '05' },
+  // 07 7.3.6, 7.14.4
+  { table: 'lab_ideas', column: 'source', ddl: "TEXT NOT NULL DEFAULT 'sync'", owner: '07' },
+  { table: 'lab_ideas', column: 'batch_id', ddl: 'TEXT', owner: '07' },
+  { table: 'lab_ideas', column: 'seed_id', ddl: 'TEXT', owner: '07' },
+  { table: 'lab_ideas', column: 'notes', ddl: 'TEXT', owner: '07' },
+  { table: 'lab_ideas', column: 'hook_form', ddl: 'TEXT', owner: '07' },
+  { table: 'lab_ideas', column: 'hook_trigger', ddl: 'TEXT', owner: '07' },
+  { table: 'lab_ideas', column: 'vs_probability', ddl: 'REAL', owner: '07' },
+  { table: 'lab_ideas', column: 'mmr_rank', ddl: 'INTEGER', owner: '07' },
+  { table: 'lab_ideas', column: 'grounding_json', ddl: "TEXT NOT NULL DEFAULT '{}'", owner: '07' },
+  { table: 'lab_ideas', column: 'prompt_version', ddl: 'TEXT', owner: '07' },
+  { table: 'lab_dissections', column: 'frames_used', ddl: 'INTEGER NOT NULL DEFAULT 0', owner: '07' },
+  { table: 'lab_dissections', column: 'on_screen_text_density', ddl: 'INTEGER', owner: '07' },
+  { table: 'lab_dissections', column: 'face_first_frame', ddl: 'INTEGER', owner: '07' },
+  { table: 'lab_dissections', column: 'sheet_path', ddl: 'TEXT', owner: '07' },
+  // 08.6.4
+  { table: 'lab_spend', column: 'line', ddl: 'TEXT', owner: '08' },
+  { table: 'lab_spend', column: 'reserved_usd', ddl: 'REAL', owner: '08' },
+  { table: 'lab_spend', column: 'actual_source', ddl: 'TEXT', owner: '08' },
+  { table: 'lab_spend', column: 'events_json', ddl: 'TEXT', owner: '08' },
+  { table: 'lab_spend', column: 'settled_at', ddl: 'TEXT', owner: '08' },
+  { table: 'lab_runs', column: 'line', ddl: 'TEXT', owner: '08' },
+  { table: 'lab_runs', column: 'job', ddl: 'TEXT', owner: '08' },
+  { table: 'lab_runs', column: 'scheduled', ddl: 'INTEGER NOT NULL DEFAULT 0', owner: '08' },
+  // 09 09.6
+  { table: 'lab_runs', column: 'batch_id', ddl: 'TEXT', owner: '09' },
+  { table: 'lab_runs', column: 'progress_json', ddl: 'TEXT', owner: '09' },
+];
+
+/** Indexes on LAB_V2_COLUMNS columns: created after the column exists, so not in LAB_DDL. */
+export const LAB_V2_INDEXES = [
+  'CREATE INDEX IF NOT EXISTS lab_post_metrics_age ON lab_post_metrics (post_id, age_h)', // 04
+  'CREATE INDEX IF NOT EXISTS lab_ideas_batch ON lab_ideas (batch_id)', // 07
+  'CREATE INDEX IF NOT EXISTS lab_runs_batch ON lab_runs (batch_id)', // 09
+] as const;
+
+/** The prior `schema_version` ({ v }); absent = 1 (a v1 database never migrated). */
+export function lab_meta_version(db: InstanceType<typeof Database>): number {
+  const row = db.prepare("SELECT value_json FROM lab_priors WHERE key = 'schema_version'").get() as { value_json: string } | undefined;
+  if (!row) return 1;
+  try {
+    const v = Number((JSON.parse(row.value_json) as { v?: unknown }).v);
+    return Number.isFinite(v) ? v : 1;
+  } catch {
+    return 1;
   }
 }
 
+/**
+ * The one v1 to v2 migration (08.11.2). Idempotent: every ADD COLUMN is guarded by
+ * PRAGMA table_info, every backfill only touches rows still missing the value, and a second
+ * run changes nothing. Needs LAB_DDL applied first (getDb, the sample world and labStore()
+ * all do). Nothing is deleted. Ends by writing prior `schema_version` { v: LAB_SCHEMA_VERSION }.
+ */
+export function migrateLabV2(db: InstanceType<typeof Database>): void {
+  const has = new Map<string, Set<string>>();
+  const cols = (table: string) => {
+    let set = has.get(table);
+    if (!set) {
+      set = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+      has.set(table, set);
+    }
+    return set;
+  };
+  if (LAB_V2_COLUMNS.every((c) => cols(c.table).has(c.column)) && lab_meta_version(db) >= LAB_SCHEMA_VERSION) return;
+  // IMMEDIATE takes the write lock first and the columns are re-read under it: `next build` runs
+  // several prerender workers on one database, and a check made outside the lock let two of them
+  // ALTER the same column ("duplicate column name: age_h").
+  db.transaction(() => {
+    has.clear();
+    const missing = LAB_V2_COLUMNS.filter((c) => !cols(c.table).has(c.column));
+    const versionNow = lab_meta_version(db);
+    if (missing.length === 0 && versionNow >= LAB_SCHEMA_VERSION) return;
+    for (const c of missing) {
+      db.exec(`ALTER TABLE ${c.table} ADD COLUMN ${c.column} ${c.ddl}`);
+      cols(c.table).add(c.column);
+    }
+    for (const sql of LAB_V2_INDEXES) db.exec(sql);
+    // 04: ages of existing reads (only when the column was just added; negative ages stay null)
+    if (missing.some((c) => c.table === 'lab_post_metrics' && c.column === 'age_h')) {
+      db.exec(`UPDATE lab_post_metrics SET age_h = (
+          SELECT (julianday(lab_post_metrics.captured_at) - julianday(p.posted_at)) * 24 FROM lab_posts p
+          WHERE p.id = lab_post_metrics.post_id AND p.posted_at IS NOT NULL
+            AND julianday(lab_post_metrics.captured_at) >= julianday(p.posted_at))
+        WHERE age_h IS NULL`);
+    }
+    // 08.6.4: v1 spend rows were all sync work on Apify
+    db.exec("UPDATE lab_spend SET line = CASE provider WHEN 'apify' THEN 'apify.sync' ELSE provider END WHERE line IS NULL");
+    db.exec("UPDATE lab_spend SET actual_source = 'dry' WHERE dry = 1 AND actual_source IS NULL");
+    db.exec("UPDATE lab_spend SET actual_source = 'provider', settled_at = at WHERE dry = 0 AND actual_usd IS NOT NULL AND actual_source IS NULL");
+    if (versionNow < LAB_SCHEMA_VERSION) {
+      db.prepare('INSERT OR REPLACE INTO lab_priors (key, value_json, n, supersedes_default, updated_at) VALUES (?, ?, 0, 0, ?)')
+        .run('schema_version', JSON.stringify({ v: LAB_SCHEMA_VERSION }), new Date().toISOString());
+    }
+  }).immediate();
+}
+/* ── end Content Lab v2 migration ── */
+
+/** Databases created before the hierarchy build lack these columns. */
 function migrateAgentsTable(db: InstanceType<typeof Database>): void {
   const columns = new Set(
     (db.pragma('table_info(agents)') as { name: string }[]).map((c) => c.name),
@@ -534,6 +1266,12 @@ function migrateAgentsTable(db: InstanceType<typeof Database>): void {
 }
 
 /** Databases created before the funnel-space build lack these columns. */
+/** 2026-09-15: the canvas stores a target agent-owned ratio per workflow. */
+function migrateWorkflowsTable(db: InstanceType<typeof Database>): void {
+  const columns = new Set((db.prepare('PRAGMA table_info(workflows)').all() as { name: string }[]).map((c) => c.name));
+  if (!columns.has('ratio_target')) db.exec('ALTER TABLE workflows ADD COLUMN ratio_target REAL');
+}
+
 function migrateFunnelContactsTable(db: InstanceType<typeof Database>): void {
   const columns = new Set(
     (db.pragma('table_info(funnel_contacts)') as { name: string }[]).map((c) => c.name),
@@ -548,18 +1286,28 @@ function migrateFunnelContactsTable(db: InstanceType<typeof Database>): void {
   }
 }
 
-// Skills gained a `markdown` (SKILL.md) column after first ship. Add it, and
-// clear the stale rows so the re-seed backfills each skill's doc.
-// roadmap_items gained `phase_id` when the phase cards on /roadmap started
-// reading their progress bar off the real rows a phase owns; databases created
-// before that predate the column.
-function migrateRoadmapTable(db: InstanceType<typeof Database>): void {
+/**
+ * The tasks overhaul (docs/TASKS-REDESIGN.md) gave a task a body, a due date,
+ * a priority, an owner lane and a horizon. Databases created before it have
+ * none of them; every column carries a default so existing rows stay valid.
+ * `agent_id` was NOT NULL and cannot be widened in place, so operator-owned
+ * tasks on an old database write the sentinel '' and read back as null.
+ */
+function migrateAgentTasksTable(db: InstanceType<typeof Database>): void {
   const columns = new Set(
-    (db.prepare('PRAGMA table_info(roadmap_items)').all() as { name: string }[]).map((c) => c.name),
+    (db.pragma('table_info(agent_tasks)') as { name: string }[]).map((c) => c.name),
   );
-  if (!columns.has('phase_id')) db.exec('ALTER TABLE roadmap_items ADD COLUMN phase_id TEXT');
+  if (columns.size === 0) return;
+  if (!columns.has('detail')) db.exec("ALTER TABLE agent_tasks ADD COLUMN detail TEXT NOT NULL DEFAULT ''");
+  if (!columns.has('due_at')) db.exec('ALTER TABLE agent_tasks ADD COLUMN due_at TEXT');
+  if (!columns.has('priority')) db.exec("ALTER TABLE agent_tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal'");
+  if (!columns.has('owner_kind')) db.exec("ALTER TABLE agent_tasks ADD COLUMN owner_kind TEXT NOT NULL DEFAULT 'agent'");
+  if (!columns.has('horizon')) db.exec('ALTER TABLE agent_tasks ADD COLUMN horizon TEXT');
+  if (!columns.has('run_id')) db.exec('ALTER TABLE agent_tasks ADD COLUMN run_id TEXT');
 }
 
+// Skills gained a `markdown` (SKILL.md) column after first ship. Add it, and
+// clear the stale rows so the re-seed backfills each skill's doc.
 function migrateSkillsTable(db: InstanceType<typeof Database>): void {
   const columns = new Set((db.pragma('table_info(skills)') as { name: string }[]).map((c) => c.name));
   if (columns.size > 0 && !columns.has('markdown')) {
@@ -568,66 +1316,102 @@ function migrateSkillsTable(db: InstanceType<typeof Database>): void {
   }
 }
 
-// agent_runs gained LLM cost columns after first ship: the model used and the
-// token usage + estimated cost, so /agents can show runtime and spend.
-function migrateAgentRunsTable(db: InstanceType<typeof Database>): void {
-  const columns = new Set(
-    (db.pragma('table_info(agent_runs)') as { name: string }[]).map((c) => c.name),
-  );
-  if (!columns.has('model')) db.exec('ALTER TABLE agent_runs ADD COLUMN model TEXT');
-  if (!columns.has('tokens_in')) db.exec('ALTER TABLE agent_runs ADD COLUMN tokens_in INTEGER');
-  if (!columns.has('tokens_out')) db.exec('ALTER TABLE agent_runs ADD COLUMN tokens_out INTEGER');
-  if (!columns.has('cost_usd')) db.exec('ALTER TABLE agent_runs ADD COLUMN cost_usd REAL');
+/** Tables whose pages were removed (SPEC S12): Reference Model and Personas. */
+export const RETIRED_TABLES = ['domains', 'personas'] as const;
+
+export type RetireOutcome = {
+  table: string;
+  action: 'absent' | 'dropped' | 'exported' | 'kept';
+  rows: number;
+  /** The JSON export holding the rows (written now, or an identical earlier one). */
+  file?: string;
+  reason?: string;
+};
+
+function localDate(d: Date): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-// The trading tables shipped single-account (captured_at was the whole key).
-// The operator watches two accounts now, so every row carries the account it came
-// from. The primary keys change, which SQLite cannot ALTER — rebuild in place
-// and adopt the existing rows as the individual account (they all were).
-function migrateTradingTables(db: InstanceType<typeof Database>): void {
-  const cols = (t: string) => new Set((db.pragma(`table_info(${t})`) as { name: string }[]).map((c) => c.name));
+function rowKeys(rows: Record<string, unknown>[]): string {
+  return rows
+    .map((r) => (r.id !== undefined ? String(r.id) : JSON.stringify(r)))
+    .sort()
+    .join('\n');
+}
 
-  // Adds the Autopilot switch. An existing limits row keeps its
-  // numbers and starts with the switch OFF.
-  if (!cols('trading_limits').has('autopilot')) {
-    db.exec('ALTER TABLE trading_limits ADD COLUMN autopilot INTEGER NOT NULL DEFAULT 0');
+/**
+ * Retire tables nothing reads any more (SPEC S12 §5.3): never lose rows
+ * silently, never leave orphan tables behind. Per table: absent → skip;
+ * empty → DROP; with rows → export to `<db dir>/retired/<table>-<date>.json`
+ * (reusing an earlier export that holds the same ids, so a restored old
+ * snapshot does not duplicate files), read the file back, check the row
+ * count, then DROP in a transaction. Any failure keeps the table and logs one
+ * warning; this never throws, so the app always opens. An in-memory DB has
+ * no directory to export to and is simply dropped.
+ */
+export function retireTables(
+  db: InstanceType<typeof Database>,
+  dbPath: string,
+  opts: { tables?: readonly string[]; now?: Date; warn?: (msg: string) => void } = {},
+): RetireOutcome[] {
+  const { tables = RETIRED_TABLES, now = new Date(), warn = (m: string) => console.warn(m) } = opts;
+  const inMemory = dbPath === ':memory:' || dbPath === '';
+  const out: RetireOutcome[] = [];
+  for (const table of tables) {
+    try {
+      const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+      if (!exists) {
+        out.push({ table, action: 'absent', rows: 0 });
+        continue;
+      }
+      const n = (db.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get() as { n: number }).n;
+      const drop = db.transaction(() => db.exec(`DROP TABLE IF EXISTS "${table}"`));
+      if (n === 0 || inMemory) {
+        drop();
+        out.push({ table, action: 'dropped', rows: n });
+        continue;
+      }
+      const rows = db.prepare(`SELECT * FROM "${table}" ORDER BY rowid`).all() as Record<string, unknown>[];
+      const keys = rowKeys(rows);
+      const dir = join(dirname(dbPath), 'retired');
+      fs.mkdirSync(dir, { recursive: true });
+      const readRows = (file: string): Record<string, unknown>[] | null => {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as { table?: string; rows?: unknown };
+          return parsed.table === table && Array.isArray(parsed.rows) ? (parsed.rows as Record<string, unknown>[]) : null;
+        } catch {
+          return null;
+        }
+      };
+      // An earlier export of exactly these rows (any date) is reused.
+      let file = fs
+        .readdirSync(dir)
+        .filter((f) => f.startsWith(`${table}-`) && f.endsWith('.json'))
+        .map((f) => join(dir, f))
+        .find((f) => {
+          const prev = readRows(f);
+          return prev !== null && prev.length === n && rowKeys(prev) === keys;
+        });
+      if (!file) {
+        const stem = `${table}-${localDate(now)}`;
+        let candidate = join(dir, `${stem}.json`);
+        for (let i = 2; fs.existsSync(candidate); i++) candidate = join(dir, `${stem}-${i}.json`);
+        const payload = { table, retiredOn: now.toISOString(), reason: 'spec 12: page removed', rows };
+        fs.writeFileSync(candidate, `${JSON.stringify(payload, null, 2)}\n`);
+        file = candidate;
+      }
+      const check = readRows(file);
+      if (!check || check.length !== n) throw new Error(`export ${file} did not read back ${n} rows`);
+      drop();
+      out.push({ table, action: 'exported', rows: n, file });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      warn(`[db] retire ${table} skipped: ${reason}`);
+      out.push({ table, action: 'kept', rows: -1, reason });
+    }
   }
-
-  if (!cols('trading_snapshots').has('account_id')) {
-    db.exec(`
-      CREATE TABLE trading_snapshots_v2 (
-        account_id TEXT NOT NULL DEFAULT 'individual',
-        account_label TEXT NOT NULL DEFAULT 'Individual',
-        captured_at TEXT NOT NULL,
-        account_value_usd REAL NOT NULL, buying_power_usd REAL NOT NULL, cash_usd REAL NOT NULL,
-        day_pnl_usd REAL NOT NULL, total_pnl_usd REAL NOT NULL, source TEXT NOT NULL,
-        PRIMARY KEY (account_id, captured_at)
-      );
-      INSERT INTO trading_snapshots_v2
-        SELECT 'individual', 'Individual', captured_at, account_value_usd, buying_power_usd,
-               cash_usd, day_pnl_usd, total_pnl_usd, source FROM trading_snapshots;
-      DROP TABLE trading_snapshots;
-      ALTER TABLE trading_snapshots_v2 RENAME TO trading_snapshots;
-    `);
-  }
-  if (!cols('trading_positions').has('account_id')) {
-    db.exec(`
-      CREATE TABLE trading_positions_v2 (
-        account_id TEXT NOT NULL DEFAULT 'individual',
-        captured_at TEXT NOT NULL, symbol TEXT NOT NULL, quantity REAL NOT NULL,
-        avg_cost_usd REAL NOT NULL, market_value_usd REAL NOT NULL, unrealized_pnl_usd REAL NOT NULL,
-        PRIMARY KEY (account_id, captured_at, symbol)
-      );
-      INSERT INTO trading_positions_v2
-        SELECT 'individual', captured_at, symbol, quantity, avg_cost_usd,
-               market_value_usd, unrealized_pnl_usd FROM trading_positions;
-      DROP TABLE trading_positions;
-      ALTER TABLE trading_positions_v2 RENAME TO trading_positions;
-    `);
-  }
-  if (!cols('trading_activity').has('account_id')) {
-    db.exec("ALTER TABLE trading_activity ADD COLUMN account_id TEXT NOT NULL DEFAULT 'individual'");
-  }
+  return out;
 }
 
 type AgentRow = {
@@ -664,14 +1448,15 @@ export function openDb(path: string) {
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   db.exec(DDL);
+  db.exec(LAB_DDL); // Content Lab (additive)
+  migrateLabV2(db); // Content Lab v2 columns (idempotent, 08.11.2)
   migrateAgentsTable(db);
   migrateFunnelContactsTable(db);
   migrateSkillsTable(db);
-  migrateAgentRunsTable(db);
-  migrateTradingTables(db);
-  migrateLeadMagnetsTable(db);
-  migrateProposalsTable(db);
-  migrateRoadmapTable(db);
+  migrateAgentTasksTable(db);
+  migrateWorkflowsTable(db);
+  migrateFounderOs(db); // FounderOS UI merge tables (additive)
+  retireTables(db, path);
 
   const departments = {
     all(): Department[] {
@@ -686,6 +1471,8 @@ export function openDb(path: string) {
       ).run(d.id, d.name, d.slug, d.tagline, d.color, d.order);
     },
     deleteWhereIdNotIn(ids: string[]): void {
+      // An empty keep-list means "keep nothing": SQL rejects `NOT IN ()`.
+      if (ids.length === 0) { db.prepare('DELETE FROM departments').run(); return; }
       const placeholders = ids.map(() => '?').join(', ');
       db.prepare(`DELETE FROM departments WHERE id NOT IN (${placeholders})`).run(...ids);
     },
@@ -702,6 +1489,14 @@ export function openDb(path: string) {
           .all(departmentId) as AgentRow[]
       ).map(rowToAgent);
     },
+    get(id: string): Agent | null {
+      const r = db.prepare('SELECT * FROM agents WHERE id = ?').get(id) as AgentRow | undefined;
+      return r ? rowToAgent(r) : null;
+    },
+    /** Failover (F9): move a stored agent onto another model. False when the id is unknown. */
+    setModel(id: string, model: string): boolean {
+      return db.prepare('UPDATE agents SET model = ? WHERE id = ?').run(model, id).changes > 0;
+    },
     insert(a: Agent): void {
       db.prepare(
         'INSERT OR REPLACE INTO agents (id, department_id, name, role, status, tier, description, model, tools, parent_id, instance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -711,6 +1506,8 @@ export function openDb(path: string) {
       );
     },
     deleteWhereIdNotIn(ids: string[]): void {
+      // An empty keep-list means "keep nothing": SQL rejects `NOT IN ()`.
+      if (ids.length === 0) { db.prepare('DELETE FROM agents').run(); return; }
       const placeholders = ids.map(() => '?').join(', ');
       db.prepare(`DELETE FROM agents WHERE id NOT IN (${placeholders})`).run(...ids);
     },
@@ -728,74 +1525,28 @@ export function openDb(path: string) {
         'INSERT OR REPLACE INTO tools (id, name, category, status, color, description) VALUES (?, ?, ?, ?, ?, ?)',
       ).run(t.id, t.name, t.category, t.status, t.color, t.description);
     },
-    // Without this a tool retired from the seed lived forever in any database
-    // that already existed: INSERT OR REPLACE adds and updates, it never
-    // removes a row that has LEFT the seed.
-    deleteWhereIdNotIn(ids: string[]): void {
-      const placeholders = ids.map(() => '?').join(', ');
-      db.prepare(`DELETE FROM tools WHERE id NOT IN (${placeholders})`).run(...ids);
-    },
   };
-
-  /** Key/value stamps about the database itself, e.g. which seed built it. */
-  const meta = {
-    get(key: string): string | null {
-      const row = db.prepare('SELECT value FROM seed_meta WHERE key = ?').get(key) as
-        | { value: string }
-        | undefined;
-      return row?.value ?? null;
-    },
-    set(key: string, value: string): void {
-      db.prepare('INSERT OR REPLACE INTO seed_meta (key, value) VALUES (?, ?)').run(key, value);
-    },
-  };
-
-  const rowToRoadmapItem = (r: any): RoadmapItem =>
-    RoadmapItemSchema.parse({
-      id: r.id,
-      title: r.title,
-      quarter: r.quarter,
-      status: r.status,
-      departmentId: r.department_id,
-      description: r.description,
-      phaseId: r.phase_id ?? null,
-    });
 
   const roadmap = {
     all(): RoadmapItem[] {
-      return db.prepare('SELECT * FROM roadmap_items ORDER BY quarter, title').all().map(rowToRoadmapItem);
+      return db
+        .prepare('SELECT * FROM roadmap_items ORDER BY quarter, title')
+        .all()
+        .map((r: any) =>
+          RoadmapItemSchema.parse({
+            id: r.id,
+            title: r.title,
+            quarter: r.quarter,
+            status: r.status,
+            departmentId: r.department_id,
+            description: r.description,
+          }),
+        );
     },
     insert(item: RoadmapItem): void {
       db.prepare(
-        'INSERT OR REPLACE INTO roadmap_items (id, title, quarter, status, department_id, description, phase_id) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(
-        item.id,
-        item.title,
-        item.quarter,
-        item.status,
-        item.departmentId,
-        item.description,
-        item.phaseId ?? null,
-      );
-    },
-    /**
-     * Mark a row done (or push it back to now/next/later) from the board. The
-     * phase percentages are done/total of these rows, so this write is what
-     * moves a phase bar; null means the id is not on the board.
-     */
-    setStatus(id: string, status: RoadmapItem['status']): RoadmapItem | null {
-      const changed = db.prepare('UPDATE roadmap_items SET status = ? WHERE id = ?').run(status, id).changes;
-      if (changed === 0) return null;
-      const row = db.prepare('SELECT * FROM roadmap_items WHERE id = ?').get(id);
-      return row ? rowToRoadmapItem(row) : null;
-    },
-    /** The seed is the roadmap: a row that left lib/seed.ts leaves the board. */
-    deleteWhereIdNotIn(ids: string[]): void {
-      if (ids.length === 0) {
-        db.prepare('DELETE FROM roadmap_items').run();
-        return;
-      }
-      db.prepare(`DELETE FROM roadmap_items WHERE id NOT IN (${ids.map(() => '?').join(',')})`).run(...ids);
+        'INSERT OR REPLACE INTO roadmap_items (id, title, quarter, status, department_id, description) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(item.id, item.title, item.quarter, item.status, item.departmentId, item.description);
     },
   };
 
@@ -810,71 +1561,6 @@ export function openDb(path: string) {
       db.prepare(
         'INSERT OR REPLACE INTO metrics (id, key, label, value, unit, delta, period) VALUES (?, ?, ?, ?, ?, ?, ?)',
       ).run(m.id, m.key, m.label, m.value, m.unit, m.delta, m.period);
-    },
-  };
-
-  const domains = {
-    all(): Domain[] {
-      return db
-        .prepare('SELECT * FROM domains ORDER BY number')
-        .all()
-        .map((r: any) => DomainSchema.parse({ ...r, items: JSON.parse(r.items) }));
-    },
-    insert(d: Domain): void {
-      db.prepare('INSERT OR REPLACE INTO domains (id, number, title, color, items) VALUES (?, ?, ?, ?, ?)').run(
-        d.id,
-        d.number,
-        d.title,
-        d.color,
-        JSON.stringify(d.items),
-      );
-    },
-  };
-
-  const personas = {
-    all(): Persona[] {
-      return db
-        .prepare('SELECT * FROM personas ORDER BY ord')
-        .all()
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((r: any) =>
-          PersonaSchema.parse({
-            id: r.id,
-            order: r.ord,
-            name: r.name,
-            archetype: r.archetype,
-            tagline: r.tagline,
-            summary: r.summary,
-            accent: r.accent,
-            northStar: r.north_star,
-            pillars: JSON.parse(r.pillars),
-            connectors: JSON.parse(r.connectors),
-            metrics: JSON.parse(r.metrics),
-            brainUse: r.brain_use,
-            signaturePlay: r.signature_play,
-          }),
-        );
-    },
-    insert(p: Persona): void {
-      db.prepare(
-        `INSERT OR REPLACE INTO personas
-          (id, ord, name, archetype, tagline, summary, accent, north_star, pillars, connectors, metrics, brain_use, signature_play)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        p.id,
-        p.order,
-        p.name,
-        p.archetype,
-        p.tagline,
-        p.summary,
-        p.accent,
-        p.northStar,
-        JSON.stringify(p.pillars),
-        JSON.stringify(p.connectors),
-        JSON.stringify(p.metrics),
-        p.brainUse,
-        p.signaturePlay,
-      );
     },
   };
 
@@ -903,36 +1589,18 @@ export function openDb(path: string) {
       finishedAt: r.finished_at,
       ok: Boolean(r.ok),
       summary: r.summary,
-      model: r.model ?? null,
-      tokensIn: r.tokens_in ?? null,
-      tokensOut: r.tokens_out ?? null,
-      costUsd: r.cost_usd ?? null,
     });
 
   const agentRuns = {
-    since(sinceIso: string, agentIds?: string[]): AgentRun[] {
-      if (agentIds && agentIds.length === 0) return [];
-      const filter = agentIds ? ` AND agent_id IN (${agentIds.map(() => '?').join(', ')})` : '';
-      return db
-        .prepare(`SELECT * FROM agent_runs WHERE started_at >= ?${filter} ORDER BY started_at DESC, rowid DESC`)
-        .all(sinceIso, ...(agentIds ?? []))
-        .map(rowToRun);
-    },
-    count(): number {
-      const row = db.prepare('SELECT COUNT(*) AS count FROM agent_runs').get() as { count: number };
-      return row.count;
-    },
-    countReal(): number {
-      const row = db
-        .prepare("SELECT COUNT(*) AS count FROM agent_runs WHERE id NOT LIKE 'seed-run-%'")
-        .get() as { count: number };
-      return row.count;
-    },
     byAgent(agentId: string): AgentRun[] {
       return db
         .prepare('SELECT * FROM agent_runs WHERE agent_id = ? ORDER BY started_at DESC')
         .all(agentId)
         .map(rowToRun);
+    },
+    get(id: string): AgentRun | null {
+      const r = db.prepare('SELECT * FROM agent_runs WHERE id = ?').get(id);
+      return r ? rowToRun(r) : null;
     },
     recent(limit: number): AgentRun[] {
       return db
@@ -940,13 +1608,19 @@ export function openDb(path: string) {
         .all(limit)
         .map(rowToRun);
     },
+    /** Lifetime run count, uncapped (SPEC C20): not `recent(n).length`, which stops at n. */
+    count(): number {
+      return (db.prepare('SELECT COUNT(*) AS n FROM agent_runs').get() as { n: number }).n;
+    },
+    /** The newest run (same order as `recent`), or null on an install with none. Feeds "last run N ago". */
+    latest(): AgentRun | null {
+      const r = db.prepare('SELECT * FROM agent_runs ORDER BY started_at DESC, rowid DESC LIMIT 1').get();
+      return r ? rowToRun(r) : null;
+    },
     insert(run: AgentRun): void {
       db.prepare(
-        'INSERT OR REPLACE INTO agent_runs (id, agent_id, started_at, finished_at, ok, summary, model, tokens_in, tokens_out, cost_usd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(
-        run.id, run.agentId, run.startedAt, run.finishedAt, run.ok ? 1 : 0, run.summary,
-        run.model ?? null, run.tokensIn ?? null, run.tokensOut ?? null, run.costUsd ?? null,
-      );
+        'INSERT OR REPLACE INTO agent_runs (id, agent_id, started_at, finished_at, ok, summary) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(run.id, run.agentId, run.startedAt, run.finishedAt, run.ok ? 1 : 0, run.summary);
     },
   };
 
@@ -1021,16 +1695,34 @@ export function openDb(path: string) {
 
   const rowToTask = (r: any): AgentTask =>
     AgentTaskSchema.parse({
-      id: r.id, agentId: r.agent_id, title: r.title, status: r.status,
+      id: r.id,
+      // '' is the old NOT NULL schema's stand-in for "no agent" (see the migration)
+      agentId: r.agent_id ? r.agent_id : null,
+      title: r.title, status: r.status,
       createdAt: r.created_at, updatedAt: r.updated_at,
+      detail: r.detail ?? '',
+      dueAt: r.due_at ?? null,
+      priority: r.priority ?? 'normal',
+      ownerKind: r.owner_kind ?? 'agent',
+      horizon: r.horizon ?? null,
+      runId: r.run_id ?? null,
     });
 
   const agentTasks = {
-    insert(t: AgentTask): void {
-      AgentTaskSchema.parse(t);
+    insert(input: AgentTaskInput): void {
+      const t = AgentTaskSchema.parse(input);
       db.prepare(
-        'INSERT OR REPLACE INTO agent_tasks (id, agent_id, title, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(t.id, t.agentId, t.title, t.status, t.createdAt, t.updatedAt);
+        `INSERT OR REPLACE INTO agent_tasks
+           (id, agent_id, title, status, created_at, updated_at, detail, due_at, priority, owner_kind, horizon, run_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        t.id, t.agentId ?? '', t.title, t.status, t.createdAt, t.updatedAt,
+        t.detail, t.dueAt, t.priority, t.ownerKind, t.horizon, t.runId,
+      );
+    },
+    get(id: string): AgentTask | null {
+      const r = db.prepare('SELECT * FROM agent_tasks WHERE id = ?').get(id);
+      return r ? rowToTask(r) : null;
     },
     byAgent(agentId: string): AgentTask[] {
       return db
@@ -1042,11 +1734,68 @@ export function openDb(path: string) {
       return db.prepare('SELECT * FROM agent_tasks ORDER BY created_at DESC, rowid DESC').all().map(rowToTask);
     },
     setStatus(id: string, status: AgentTask['status'], updatedAt: string): void {
-      AgentTaskSchema.shape.status.parse(status);
+      AgentTaskStatusSchema.parse(status);
       db.prepare('UPDATE agent_tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, updatedAt, id);
+    },
+    /** Partial edit of the fields the task drawer owns. Validates by round-
+     *  tripping the whole task, so a bad patch can never reach the table. */
+    update(
+      id: string,
+      patch: Partial<Pick<AgentTask, 'title' | 'detail' | 'dueAt' | 'priority' | 'horizon' | 'agentId' | 'ownerKind' | 'runId'>>,
+      updatedAt: string,
+    ): void {
+      const current = this.get(id);
+      if (!current) return;
+      const next = AgentTaskSchema.parse({ ...current, ...patch, updatedAt });
+      db.prepare(
+        `UPDATE agent_tasks
+            SET title = ?, detail = ?, due_at = ?, priority = ?, horizon = ?,
+                agent_id = ?, owner_kind = ?, run_id = ?, updated_at = ?
+          WHERE id = ?`,
+      ).run(
+        next.title, next.detail, next.dueAt, next.priority, next.horizon,
+        next.agentId ?? '', next.ownerKind, next.runId, next.updatedAt, id,
+      );
     },
     remove(id: string): void {
       db.prepare('DELETE FROM agent_tasks WHERE id = ?').run(id);
+    },
+  };
+
+  const setupChecks = {
+    set(id: string, doneAt: string): void {
+      SetupCheckSchema.parse({ id, doneAt });
+      db.prepare('INSERT OR REPLACE INTO setup_checks (id, done_at) VALUES (?, ?)').run(id, doneAt);
+    },
+    unset(id: string): void {
+      db.prepare('DELETE FROM setup_checks WHERE id = ?').run(id);
+    },
+    all(): SetupCheck[] {
+      return db
+        .prepare('SELECT * FROM setup_checks')
+        .all()
+        .map((r: any) => SetupCheckSchema.parse({ id: r.id, doneAt: r.done_at }));
+    },
+  };
+
+  const rowToBrandDealOverride = (r: any): BrandDealOverride =>
+    BrandDealOverrideSchema.parse({
+      dealId: r.deal_id, outcome: r.outcome, amountUsd: r.amount_usd ?? null, updatedAt: r.updated_at,
+    });
+
+  const brandDeals = {
+    upsert(o: BrandDealOverride): void {
+      BrandDealOverrideSchema.parse(o);
+      db.prepare(
+        'INSERT OR REPLACE INTO brand_deal_overrides (deal_id, outcome, amount_usd, updated_at) VALUES (?, ?, ?, ?)',
+      ).run(o.dealId, o.outcome, o.amountUsd, o.updatedAt);
+    },
+    get(dealId: string): BrandDealOverride | null {
+      const r = db.prepare('SELECT * FROM brand_deal_overrides WHERE deal_id = ?').get(dealId);
+      return r ? rowToBrandDealOverride(r) : null;
+    },
+    all(): BrandDealOverride[] {
+      return db.prepare('SELECT * FROM brand_deal_overrides').all().map(rowToBrandDealOverride);
     },
   };
 
@@ -1055,124 +1804,6 @@ export function openDb(path: string) {
       id: r.id, agentId: r.agent_id, schedule: r.schedule, description: r.description,
       enabled: Boolean(r.enabled), createdAt: r.created_at,
     });
-
-  const rowToCronRun = (r: any): CronRun =>
-    CronRunSchema.parse({
-      id: r.id, cronId: r.cron_id, agentId: r.agent_id, startedAt: r.started_at,
-      finishedAt: r.finished_at ?? null, ok: Boolean(r.ok), summary: r.summary,
-    });
-
-  const cronRuns = {
-    since(sinceIso: string): CronRun[] {
-      return db
-        .prepare('SELECT * FROM cron_runs WHERE started_at >= ? ORDER BY started_at DESC, rowid DESC')
-        .all(sinceIso)
-        .map(rowToCronRun);
-    },
-    insert(r: CronRun): void {
-      CronRunSchema.parse(r);
-      db.prepare(
-        'INSERT OR REPLACE INTO cron_runs (id, cron_id, agent_id, started_at, finished_at, ok, summary) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(r.id, r.cronId, r.agentId, r.startedAt, r.finishedAt, r.ok ? 1 : 0, r.summary);
-    },
-    byCron(cronId: string, limit = 20): CronRun[] {
-      return db
-        .prepare('SELECT * FROM cron_runs WHERE cron_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?')
-        .all(cronId, limit)
-        .map(rowToCronRun);
-    },
-    recent(limit = 50): CronRun[] {
-      return db
-        .prepare('SELECT * FROM cron_runs ORDER BY started_at DESC, rowid DESC LIMIT ?')
-        .all(limit)
-        .map(rowToCronRun);
-    },
-    /** run counts + last outcome per cron — the stats worth keeping per job. */
-    statsByCron(): Record<string, { runs: number; ok: number; lastRunAt: string | null; lastOk: boolean | null }> {
-      const rows = db
-        .prepare(
-          `SELECT cron_id AS cronId, COUNT(*) AS runs, SUM(ok) AS okCount, MAX(started_at) AS lastRunAt
-           FROM cron_runs GROUP BY cron_id`,
-        )
-        .all() as { cronId: string; runs: number; okCount: number; lastRunAt: string }[];
-      const out: Record<string, { runs: number; ok: number; lastRunAt: string | null; lastOk: boolean | null }> = {};
-      for (const r of rows) {
-        const last = db
-          .prepare('SELECT ok FROM cron_runs WHERE cron_id = ? ORDER BY started_at DESC, rowid DESC LIMIT 1')
-          .get(r.cronId) as { ok: number } | undefined;
-        out[r.cronId] = {
-          runs: r.runs,
-          ok: r.okCount ?? 0,
-          lastRunAt: r.lastRunAt ?? null,
-          lastOk: last ? last.ok === 1 : null,
-        };
-      }
-      return out;
-    },
-  };
-
-  const digestReads = {
-    mark(key: string, at = new Date().toISOString()): void {
-      db.prepare('INSERT OR REPLACE INTO digest_reads (key, read_at) VALUES (?, ?)').run(key, at);
-    },
-    unmark(key: string): void {
-      db.prepare('DELETE FROM digest_reads WHERE key = ?').run(key);
-    },
-    keys(): string[] {
-      return (db.prepare('SELECT key FROM digest_reads ORDER BY read_at DESC').all() as { key: string }[]).map(
-        (r) => r.key,
-      );
-    },
-    /** Housekeeping: a key for a message older than the window can never match
-     *  again, so the table stays small instead of growing forever. */
-    prune(before: string): void {
-      db.prepare('DELETE FROM digest_reads WHERE read_at < ?').run(before);
-    },
-  };
-
-  const commsDigests = {
-    insert(d: { id: string; generatedAt: string; payload: string }): void {
-      db.prepare('INSERT OR REPLACE INTO comms_digests (id, generated_at, payload) VALUES (?, ?, ?)').run(
-        d.id,
-        d.generatedAt,
-        d.payload,
-      );
-    },
-    latest(): { id: string; generatedAt: string; payload: string } | null {
-      const row = db
-        .prepare('SELECT id, generated_at AS generatedAt, payload FROM comms_digests ORDER BY generated_at DESC, rowid DESC LIMIT 1')
-        .get() as { id: string; generatedAt: string; payload: string } | undefined;
-      return row ?? null;
-    },
-    recent(limit = 14): { id: string; generatedAt: string; payload: string }[] {
-      return db
-        .prepare('SELECT id, generated_at AS generatedAt, payload FROM comms_digests ORDER BY generated_at DESC, rowid DESC LIMIT ?')
-        .all(limit) as { id: string; generatedAt: string; payload: string }[];
-    },
-  };
-
-  // Plaud recordings already filed into the brain (lib/plaud-ingest.ts). The
-  // file id is the idempotency key: one page per recording, ever.
-  const plaudIngests = {
-    insert(r: PlaudIngest): void {
-      const v = PlaudIngestSchema.parse(r);
-      db.prepare(
-        'INSERT OR REPLACE INTO plaud_ingests (file_id, title, recorded_at, ingested_at, via, slug, claims) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(v.fileId, v.title, v.recordedAt, v.ingestedAt, v.via, v.slug, v.claims);
-    },
-    has(fileId: string): boolean {
-      return !!db.prepare('SELECT 1 FROM plaud_ingests WHERE file_id = ?').get(fileId);
-    },
-    all(): PlaudIngest[] {
-      return (
-        db
-          .prepare(
-            'SELECT file_id AS fileId, title, recorded_at AS recordedAt, ingested_at AS ingestedAt, via, slug, claims FROM plaud_ingests ORDER BY ingested_at DESC',
-          )
-          .all() as unknown[]
-      ).map((row) => PlaudIngestSchema.parse(row));
-    },
-  };
 
   const agentCrons = {
     insert(c: AgentCron): void {
@@ -1343,258 +1974,6 @@ export function openDb(path: string) {
     },
   };
 
-  /** Robinhood agentic account, agent-fed. The trading agent pushes snapshots
-   *  (account + positions) and individual trades via /api/trading/*; the
-   *  /trading dashboard reads them back. Never queried from a page directly. */
-  const trading = {
-    recordSnapshot(s: TradingAccountSnapshot, positions: TradingPosition[]): void {
-      TradingAccountSnapshotSchema.parse(s);
-      db.prepare(
-        `INSERT OR REPLACE INTO trading_snapshots
-           (account_id, account_label, captured_at, account_value_usd, buying_power_usd, cash_usd,
-            day_pnl_usd, total_pnl_usd, source)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        s.accountId, s.accountLabel, s.capturedAt, s.accountValueUsd,
-        s.buyingPowerUsd, s.cashUsd, s.dayPnlUsd, s.totalPnlUsd, s.source,
-      );
-      const ins = db.prepare(
-        `INSERT OR REPLACE INTO trading_positions
-           (account_id, captured_at, symbol, quantity, avg_cost_usd, market_value_usd, unrealized_pnl_usd)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const p of positions) {
-        TradingPositionSchema.parse(p);
-        ins.run(p.accountId, p.capturedAt, p.symbol, p.quantity, p.avgCostUsd, p.marketValueUsd, p.unrealizedPnlUsd);
-      }
-    },
-    /**
- * Drop the demo rows the moment real data exists. Seeded snapshots carry
- * source 'seed' (their positions share the captured_at), seeded trades
- * carry ids 'tr-seed-*'. Left in place they sit in FRONT of the real
- * series and draw a fake cliff on the sleeve graph (the host).
- */
-    evictSeeded(): { snapshots: number; positions: number; activity: number } {
-      const run = db.transaction(() => {
-        const positions = db
-          .prepare(
-            `DELETE FROM trading_positions
-              WHERE (account_id, captured_at) IN
-                    (SELECT account_id, captured_at FROM trading_snapshots WHERE source = 'seed')`,
-          )
-          .run().changes;
-        const snapshots = db.prepare(`DELETE FROM trading_snapshots WHERE source = 'seed'`).run().changes;
-        const activity = db.prepare(`DELETE FROM trading_activity WHERE id LIKE 'tr-seed-%'`).run().changes;
-        return { snapshots, positions, activity };
-      });
-      return run();
-    },
-    /** The largest account's latest snapshot — what the connector card reports. */
-    latestSnapshot(): TradingAccountSnapshot | null {
-      return trading.latestSnapshots()[0] ?? null;
-    },
-    /** The newest snapshot of every account, richest first. */
-    latestSnapshots(): TradingAccountSnapshot[] {
-      return db
-        .prepare(
-          `SELECT account_id AS accountId, account_label AS accountLabel, captured_at AS capturedAt,
-                  account_value_usd AS accountValueUsd, buying_power_usd AS buyingPowerUsd,
-                  cash_usd AS cashUsd, day_pnl_usd AS dayPnlUsd, total_pnl_usd AS totalPnlUsd, source
-             FROM trading_snapshots
-            WHERE (account_id, captured_at) IN
-                  (SELECT account_id, MAX(captured_at) FROM trading_snapshots GROUP BY account_id)
-            ORDER BY account_value_usd DESC`,
-        )
-        .all()
-        .map((r) => TradingAccountSnapshotSchema.parse(r));
-    },
-    /** One account's snapshots oldest-first — the series behind the graph. */
-    history(accountId: string, limit = 500): TradingAccountSnapshot[] {
-      return db
-        .prepare(
-          `SELECT account_id AS accountId, account_label AS accountLabel, captured_at AS capturedAt,
-                  account_value_usd AS accountValueUsd, buying_power_usd AS buyingPowerUsd,
-                  cash_usd AS cashUsd, day_pnl_usd AS dayPnlUsd, total_pnl_usd AS totalPnlUsd, source
-             FROM trading_snapshots WHERE account_id = ?
-            ORDER BY captured_at ASC LIMIT ?`,
-        )
-        .all(accountId, limit)
-        .map((r) => TradingAccountSnapshotSchema.parse(r));
-    },
-    /** Positions from each account's latest snapshot (all accounts by default). */
-    positions(accountId?: string): TradingPosition[] {
-      const rows = db
-        .prepare(
-          `SELECT p.account_id AS accountId, p.captured_at AS capturedAt, p.symbol, p.quantity,
-                  p.avg_cost_usd AS avgCostUsd, p.market_value_usd AS marketValueUsd,
-                  p.unrealized_pnl_usd AS unrealizedPnlUsd
-             FROM trading_positions p
-            WHERE (p.account_id, p.captured_at) IN
-                  (SELECT account_id, MAX(captured_at) FROM trading_snapshots GROUP BY account_id)
-              AND (? IS NULL OR p.account_id = ?)
-            ORDER BY p.market_value_usd DESC`,
-        )
-        .all(accountId ?? null, accountId ?? null);
-      return rows.map((r) => TradingPositionSchema.parse(r));
-    },
-    /**
-     * Replace one account's live orders wholesale. Deliberately NOT an upsert:
-     * an order that filled or was cancelled has to disappear, and a stale
-     * "queued" row on screen is worse than showing nothing.
-     */
-    recordOpenOrders(accountId: string, orders: TradingOrder[]): void {
-      const write = db.transaction(() => {
-        db.prepare('DELETE FROM trading_orders WHERE account_id = ?').run(accountId);
-        const ins = db.prepare(
-          `INSERT OR REPLACE INTO trading_orders
-             (id, account_id, symbol, side, type, state, quantity, filled_quantity,
-              dollar_amount_usd, limit_price_usd, placed_agent, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const o of orders) {
-          TradingOrderSchema.parse(o);
-          ins.run(o.id, accountId, o.symbol, o.side, o.type, o.state, o.quantity,
-            o.filledQuantity, o.dollarAmountUsd, o.limitPriceUsd, o.placedAgent, o.createdAt);
-        }
-      });
-      write();
-    },
-    openOrders(accountId?: string): TradingOrder[] {
-      return db
-        .prepare(
-          `SELECT id, account_id AS accountId, symbol, side, type, state, quantity,
-                  filled_quantity AS filledQuantity, dollar_amount_usd AS dollarAmountUsd,
-                  limit_price_usd AS limitPriceUsd, placed_agent AS placedAgent, created_at AS createdAt
-             FROM trading_orders WHERE (? IS NULL OR account_id = ?)
-            ORDER BY created_at DESC`,
-        )
-        .all(accountId ?? null, accountId ?? null)
-        .map((r) => TradingOrderSchema.parse(r));
-    },
-    /** One run's reasoning. Idempotent on id so a retried push cannot duplicate. */
-    recordAnalysis(a: TradeAnalysis): void {
-      TradeAnalysisSchema.parse(a);
-      db.prepare(
-        `INSERT OR REPLACE INTO trading_analysis
-           (id, at, account_id, agent, examined, signals, notes, rows)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(a.id, a.at, a.accountId, a.agent, a.examined, a.signals, a.notes, JSON.stringify(a.rows));
-    },
-    analyses(accountId?: string, limit = 30): TradeAnalysis[] {
-      return db
-        .prepare(
-          `SELECT id, at, account_id AS accountId, agent, examined, signals, notes, rows
-             FROM trading_analysis WHERE (? IS NULL OR account_id = ?)
-            ORDER BY at DESC LIMIT ?`,
-        )
-        .all(accountId ?? null, accountId ?? null, limit)
-        .map((r) => {
-          const row = r as { rows: string } & Record<string, unknown>;
-          return TradeAnalysisSchema.parse({ ...row, rows: JSON.parse(row.rows) });
-        });
-    },
-    latestAnalysis(accountId?: string): TradeAnalysis | null {
-      return trading.analyses(accountId, 1)[0] ?? null;
-    },
-    recordActivity(a: TradeActivity): void {
-      TradeActivitySchema.parse(a);
-      db.prepare(
-        `INSERT OR REPLACE INTO trading_activity
-           (id, at, account_id, agent, action, symbol, quantity, price_usd, rationale, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(a.id, a.at, a.accountId, a.agent, a.action, a.symbol, a.quantity, a.priceUsd, a.rationale, a.status);
-    },
-    activity(limit = 50, accountId?: string): TradeActivity[] {
-      return db
-        .prepare(
-          `SELECT id, at, account_id AS accountId, agent, action, symbol, quantity,
-                  price_usd AS priceUsd, rationale, status
-             FROM trading_activity WHERE (? IS NULL OR account_id = ?)
-            ORDER BY at DESC LIMIT ?`,
-        )
-        .all(accountId ?? null, accountId ?? null, limit)
-        .map((r) => TradeActivitySchema.parse(r));
-    },
-
-    /** The agent's editable guardrail limits, or null when none were ever
-     *  saved — the caller then falls back to the code defaults rather than
-     *  inventing a permissive set. */
-    limits(): TradingLimits | null {
-      const row = db
-        .prepare(
-          `SELECT max_notional_per_trade_usd AS maxNotionalPerTradeUsd,
-                  max_position_pct_of_sleeve AS maxPositionPctOfSleeve,
-                  max_risk_pct_per_trade     AS maxRiskPctPerTrade,
-                  max_concurrent_positions   AS maxConcurrentPositions,
-                  max_trades_per_day         AS maxTradesPerDay,
-                  min_sleeve_value_usd       AS minSleeveValueUsd,
-                  max_deployed_capital_usd   AS maxDeployedCapitalUsd,
-                  autopilot
-             FROM trading_limits WHERE id = 1`,
-        )
-        .get() as (Record<string, number> & { autopilot: number }) | undefined;
-      return row ? TradingLimitsSchema.parse({ ...row, autopilot: row.autopilot === 1 }) : null;
-    },
-
-    limitsUpdatedAt(): string | null {
-      const row = db.prepare('SELECT updated_at AS updatedAt FROM trading_limits WHERE id = 1').get() as
-        | { updatedAt: string }
-        | undefined;
-      return row?.updatedAt ?? null;
-    },
-
-    saveLimits(l: Omit<TradingLimits, 'autopilot'> & { autopilot?: boolean }, now = new Date().toISOString()): void {
-      db.prepare(
-        `INSERT OR REPLACE INTO trading_limits
-           (id, max_notional_per_trade_usd, max_position_pct_of_sleeve, max_risk_pct_per_trade,
-            max_concurrent_positions, max_trades_per_day, min_sleeve_value_usd,
-            max_deployed_capital_usd, autopilot, updated_at)
-         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        l.maxNotionalPerTradeUsd,
-        l.maxPositionPctOfSleeve,
-        l.maxRiskPctPerTrade,
-        l.maxConcurrentPositions,
-        l.maxTradesPerDay,
-        l.minSleeveValueUsd,
-        l.maxDeployedCapitalUsd,
-        l.autopilot ? 1 : 0,
-        now,
-      );
-    },
-  };
-
-  /** Per-metric history for the analytics sparklines. Written by the
-   *  /api/analytics/refresh sweep (launchd cron every 15 min); one row per
-   *  capture, read back as per-day last-known value. */
-  const metricSnapshots = {
-    record(metricId: string, value: number, capturedAt: string): void {
-      MetricSnapshotSchema.parse({ metricId, capturedAt, value });
-      db.prepare(
-        'INSERT OR REPLACE INTO metric_snapshots (metric_id, captured_at, value) VALUES (?, ?, ?)',
-      ).run(metricId, capturedAt, value);
-    },
-    history(metricId: string, days: number, today: string): { date: string; value: number }[] {
-      return db
-        .prepare(
-          `SELECT date, value FROM (
-             SELECT substr(captured_at, 1, 10) AS date, value,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY substr(captured_at, 1, 10) ORDER BY captured_at DESC
-                    ) AS rn
-             FROM metric_snapshots
-             WHERE metric_id = ? AND substr(captured_at, 1, 10) >= date(?, ?)
-           ) WHERE rn = 1 ORDER BY date`,
-        )
-        .all(metricId, today, `-${Math.max(1, Math.floor(days))} days`)
-        .map((r) => {
-          const row = r as { date: string; value: number };
-          MetricSnapshotSchema.parse({ metricId, capturedAt: row.date, value: row.value });
-          return row;
-        });
-    },
-  };
-
   const rowToPost = (r: {
     id: string;
     caption: string;
@@ -1634,6 +2013,14 @@ export function openDb(path: string) {
         .all()
         .map((r) => rowToPost(r as Parameters<typeof rowToPost>[0]));
     },
+    /** Withdraw a post that is still queued (SPEC H40). One statement, so a
+        post the agent picks up concurrently is never deleted mid-publish. */
+    removeQueued(id: string): 'removed' | 'missing' | 'not_queued' {
+      const res = db.prepare("DELETE FROM social_posts WHERE id = ? AND status = 'queued'").run(id);
+      if (res.changes > 0) return 'removed';
+      const exists = db.prepare('SELECT 1 FROM social_posts WHERE id = ?').get(id);
+      return exists ? 'not_queued' : 'missing';
+    },
   };
 
   const people = {
@@ -1658,6 +2045,8 @@ export function openDb(path: string) {
       ).run(p.id, p.departmentId, p.name, p.role, JSON.stringify(p.tools));
     },
     deleteWhereIdNotIn(ids: string[]): void {
+      // An empty keep-list means "keep nothing": SQL rejects `NOT IN ()`.
+      if (ids.length === 0) { db.prepare('DELETE FROM people').run(); return; }
       const placeholders = ids.map(() => '?').join(', ');
       db.prepare(`DELETE FROM people WHERE id NOT IN (${placeholders})`).run(...ids);
     },
@@ -1687,248 +2076,107 @@ export function openDb(path: string) {
       ).run(t.id, t.departmentId, t.title, t.summary, JSON.stringify(t.steps), t.assigneeKind, t.assigneeId);
     },
     deleteWhereIdNotIn(ids: string[]): void {
+      // An empty keep-list means "keep nothing": SQL rejects `NOT IN ()`.
+      if (ids.length === 0) { db.prepare('DELETE FROM sop_tasks').run(); return; }
       const placeholders = ids.map(() => '?').join(', ');
       db.prepare(`DELETE FROM sop_tasks WHERE id NOT IN (${placeholders})`).run(...ids);
     },
   };
 
-  /** Client proposals. The generator deploys to Vercel and leaves source on
-   *  the operator's laptop, so the URL is what the OS stores and shows. */
-  const proposals = {
-    all(): Proposal[] {
-      return db
-        .prepare('SELECT * FROM proposals ORDER BY created_at DESC, client')
-        .all()
-        .map((r: any) =>
-          ProposalSchema.parse({
-            id: r.id,
-            client: r.client,
-            brand: r.brand,
-            url: r.url,
-            status: r.status,
-            amountUsd: r.amount_usd ?? null,
-            notes: r.notes ?? '',
-            createdAt: r.created_at,
-            origin: r.origin ?? 'seed',
-            accessCode: r.access_code ?? '',
-          }),
-        );
+  const rowToWorkflow = (r: any): Workflow =>
+    WorkflowSchema.parse({
+      id: r.id,
+      name: r.name,
+      subtitle: r.subtitle,
+      revenueUsd: r.revenue_usd,
+      order: r.ord,
+      steps: JSON.parse(r.steps),
+      // only present when set, so rows written before the canvas read back
+      // exactly as they were written
+      ...(r.ratio_target != null ? { ratioTarget: r.ratio_target } : {}),
+    });
+
+  const rowToWorkflowVersion = (r: any): WorkflowVersion =>
+    WorkflowVersionSchema.parse({ id: r.id, workflowId: r.workflow_id, version: r.version, createdAt: r.created_at, note: r.note, snapshot: JSON.parse(r.snapshot) });
+  const workflowVersions = {
+    list(workflowId: string): WorkflowVersion[] {
+      return db.prepare('SELECT * FROM workflow_versions WHERE workflow_id = ? ORDER BY version DESC').all(workflowId).map(rowToWorkflowVersion);
     },
-    insert(p: Proposal): void {
-      ProposalSchema.parse(p);
-      db.prepare(
-        `INSERT OR REPLACE INTO proposals
-           (id, client, brand, url, status, amount_usd, notes, created_at, origin, access_code)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        p.id,
-        p.client,
-        p.brand,
-        p.url,
-        p.status,
-        p.amountUsd,
-        p.notes,
-        p.createdAt,
-        p.origin ?? 'seed',
-        p.accessCode ?? '',
-      );
+    get(id: string): WorkflowVersion | null {
+      const r = db.prepare('SELECT * FROM workflow_versions WHERE id = ?').get(id) as any;
+      return r ? rowToWorkflowVersion(r) : null;
     },
-    /** Re-seed cleanup that only ever removes rows the SEED owns. A proposal
-     *  the operator added through the OS is theirs, and must survive. */
-    deleteSeededNotIn(ids: string[]): void {
-      const keep = ids.length ? ids.map(() => '?').join(',') : "''";
-      db.prepare(`DELETE FROM proposals WHERE origin = 'seed' AND id NOT IN (${keep})`).run(...ids);
+    latest(workflowId: string): WorkflowVersion | null {
+      const r = db.prepare('SELECT * FROM workflow_versions WHERE workflow_id = ? ORDER BY version DESC LIMIT 1').get(workflowId) as any;
+      return r ? rowToWorkflowVersion(r) : null;
+    },
+    /** Appends a version unless the snapshot equals the latest one. */
+    record(w: Workflow, note = ''): WorkflowVersion | null {
+      const snapshot = JSON.stringify(w);
+      const last = workflowVersions.latest(w.id);
+      if (last && JSON.stringify(last.snapshot) === snapshot) return null;
+      const version = (last?.version ?? 0) + 1;
+      const id = `${w.id}-v${version}`;
+      const createdAt = new Date().toISOString();
+      db.prepare('INSERT INTO workflow_versions (id, workflow_id, version, created_at, note, snapshot) VALUES (?, ?, ?, ?, ?, ?)').run(id, w.id, version, createdAt, note, snapshot);
+      return { id, workflowId: w.id, version, createdAt, note, snapshot: JSON.parse(snapshot) };
     },
   };
 
-  /**
- * The operator's approve/dismiss calls on agent work.
- *
- * Server-side rather than localStorage because the board runs on the host and
- * the operator opens the OS from more than one machine: a call made on the
- * laptop has to still be made on the phone. It is also the only place an
- * agent could ever read the decision back.
- */
-  const deliverableDecisions = {
-    all(): DeliverableDecision[] {
-      return db
-        .prepare('SELECT * FROM deliverable_decisions ORDER BY decided_at DESC, id')
-        .all()
-        .map((r: any) =>
-          DeliverableDecisionSchema.parse({
-            id: r.id,
-            decision: r.decision,
-            decidedAt: r.decided_at,
-            decidedRevision: r.decided_revision ?? '',
-            note: r.note ?? '',
-          }),
-        );
+  const rowToConfigVersion = (r: any): ConfigVersion =>
+    ConfigVersionSchema.parse({ id: r.id, target: r.target, version: r.version, createdAt: r.created_at, note: r.note, snapshot: JSON.parse(r.snapshot) });
+  const configVersions = {
+    list(target: string): ConfigVersion[] {
+      return db.prepare('SELECT * FROM config_versions WHERE target = ? ORDER BY version DESC').all(target).map(rowToConfigVersion);
     },
-    /** Deciding again on the same id replaces: one open call per deliverable. */
-    set(d: DeliverableDecision): void {
-      const v = DeliverableDecisionSchema.parse(d);
-      db.prepare(
-        `INSERT OR REPLACE INTO deliverable_decisions
-           (id, decision, decided_at, decided_revision, note)
-         VALUES (?, ?, ?, ?, ?)`,
-      ).run(v.id, v.decision, v.decidedAt, v.decidedRevision, v.note);
+    get(id: string): ConfigVersion | null {
+      const r = db.prepare('SELECT * FROM config_versions WHERE id = ?').get(id) as any;
+      return r ? rowToConfigVersion(r) : null;
     },
-    /** Undo — the row returns to the open queue. */
-    clear(id: string): void {
-      db.prepare('DELETE FROM deliverable_decisions WHERE id = ?').run(id);
+    latest(target: string): ConfigVersion | null {
+      const r = db.prepare('SELECT * FROM config_versions WHERE target = ? ORDER BY version DESC LIMIT 1').get(target) as any;
+      return r ? rowToConfigVersion(r) : null;
     },
-  };
-
-  /**
- * Brand deals, owned by the OS: the operator is moving off Notion and wants
- * this to be its own system of record. The Notion connector still backs the
- * existing /brand-deals board, but the agent and anything new read here.
- */
-  const brandDeals = {
-    all(): BrandDeal[] {
-      return db
-        .prepare('SELECT * FROM brand_deals ORDER BY last_edited DESC, brand')
-        .all()
-        .map((r: any) =>
-          BrandDealSchema.parse({
-            id: r.id,
-            brand: r.brand,
-            status: r.status,
-            tier: r.tier ?? null,
-            dealValueUsd: r.deal_value_usd ?? null,
-            budgetUsd: r.budget_usd ?? null,
-            amountAgreedUsd: r.amount_agreed_usd ?? null,
-            suggestedRateUsd: r.suggested_rate_usd ?? null,
-            paidInFull: !!r.paid_in_full,
-            deadline: r.deadline ?? null,
-            followUpDate: r.follow_up_date ?? null,
-            contactName: r.contact_name ?? null,
-            contactEmail: r.contact_email ?? null,
-            mainChannel: r.main_channel ?? null,
-            videoType: r.video_type ?? null,
-            source: r.source ?? null,
-            icpFit: r.icp_fit ?? null,
-            notionUrl: r.notion_url,
-            lastEdited: r.last_edited,
-            seeded: !!r.seeded,
-          }),
-        );
-    },
-    upsert(d: BrandDeal): void {
-      BrandDealSchema.parse(d);
-      db.prepare(
-        `INSERT OR REPLACE INTO brand_deals
-           (id, brand, status, tier, deal_value_usd, budget_usd, amount_agreed_usd,
-            suggested_rate_usd, paid_in_full, deadline, follow_up_date, contact_name,
-            contact_email, main_channel, video_type, source, icp_fit, notion_url,
-            last_edited, seeded)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        d.id, d.brand, d.status, d.tier, d.dealValueUsd, d.budgetUsd, d.amountAgreedUsd,
-        d.suggestedRateUsd, d.paidInFull ? 1 : 0, d.deadline, d.followUpDate, d.contactName,
-        d.contactEmail, d.mainChannel, d.videoType, d.source, d.icpFit, d.notionUrl,
-        d.lastEdited, d.seeded ? 1 : 0,
-      );
-    },
-    remove(id: string): void {
-      db.prepare('DELETE FROM brand_deals WHERE id = ?').run(id);
-    },
-  };
-
-  const leadMagnets = {
-    all(): LeadMagnet[] {
-      return db
-        .prepare('SELECT * FROM lead_magnets ORDER BY launched_at DESC, name')
-        .all()
-        .map((r: any) =>
-          LeadMagnetSchema.parse({
-            id: r.id,
-            name: r.name,
-            offer: r.offer,
-            url: r.url,
-            status: r.status,
-            captures: r.captures,
-            destination: r.destination,
-            source: r.source,
-            launchedAt: r.launched_at,
-            notes: r.notes,
-            origin: r.origin ?? 'seed',
-          }),
-        );
-    },
-    insert(m: LeadMagnet): void {
-      LeadMagnetSchema.parse(m);
-      db.prepare(
-        'INSERT OR REPLACE INTO lead_magnets (id, name, offer, url, status, captures, destination, source, launched_at, notes, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).run(m.id, m.name, m.offer, m.url, m.status, m.captures, m.destination, m.source, m.launchedAt, m.notes, m.origin ?? 'seed');
-    },
-    byId(id: string): LeadMagnet | null {
-      const r = db.prepare('SELECT * FROM lead_magnets WHERE id = ?').get(id) as any;
-      if (!r) return null;
-      return LeadMagnetSchema.parse({
-        id: r.id, name: r.name, offer: r.offer, url: r.url, status: r.status,
-        captures: r.captures, destination: r.destination, source: r.source,
-        launchedAt: r.launched_at, notes: r.notes, origin: r.origin ?? 'seed',
-      });
-    },
-    /** Delete one row by id. Returns false when it was not there, so the API
-     *  can 404 instead of pretending. */
-    remove(id: string): boolean {
-      return db.prepare('DELETE FROM lead_magnets WHERE id = ?').run(id).changes > 0;
-    },
-    /** Prune retired SEED rows only. Anything created from the OS is the operator's
-     *  and is never deleted by a re-seed. */
-    deleteWhereIdNotIn(ids: string[]): void {
-      const placeholders = ids.map(() => '?').join(', ');
-      db.prepare(
-        `DELETE FROM lead_magnets WHERE origin = 'seed' AND id NOT IN (${placeholders})`,
-      ).run(...ids);
+    /** Appends a version unless identical to the latest. */
+    record(target: string, snapshotValue: unknown, note = ''): ConfigVersion {
+      const snapshot = JSON.stringify(snapshotValue);
+      const last = configVersions.latest(target);
+      if (last && JSON.stringify(last.snapshot) === snapshot) return last;
+      const version = (last?.version ?? 0) + 1;
+      const id = `${target}-v${version}`;
+      const createdAt = new Date().toISOString();
+      db.prepare('INSERT INTO config_versions (id, target, version, created_at, note, snapshot) VALUES (?, ?, ?, ?, ?, ?)').run(id, target, version, createdAt, note, snapshot);
+      return { id, target, version, createdAt, note, snapshot: JSON.parse(snapshot) };
     },
   };
 
   const workflows = {
     all(): Workflow[] {
-      return db
-        .prepare('SELECT * FROM workflows ORDER BY ord, name')
-        .all()
-        .map((r: any) =>
-          WorkflowSchema.parse({
-            id: r.id,
-            name: r.name,
-            subtitle: r.subtitle,
-            revenueUsd: r.revenue_usd,
-            order: r.ord,
-            steps: JSON.parse(r.steps),
-          }),
-        );
+      return db.prepare('SELECT * FROM workflows ORDER BY ord, name').all().map(rowToWorkflow);
     },
-    /** Single workflow by id, or null when it doesn't exist: the builder's
+    /** Single workflow by id, or null when it doesn't exist — the builder's
      *  update/delete routes use this to tell "not found" from a real 500. */
     get(id: string): Workflow | null {
       const r = db.prepare('SELECT * FROM workflows WHERE id = ?').get(id) as any;
-      if (!r) return null;
-      return WorkflowSchema.parse({
-        id: r.id,
-        name: r.name,
-        subtitle: r.subtitle,
-        revenueUsd: r.revenue_usd,
-        order: r.ord,
-        steps: JSON.parse(r.steps),
-      });
+      return r ? rowToWorkflow(r) : null;
     },
-    insert(w: Workflow): void {
+    /** Create-or-replace, and the ONLY write path — so every save records a
+     *  version (skipped when nothing changed, so re-running the seed does not
+     *  pile up identical rows). `note` labels the version. */
+    insert(w: Workflow, note = ''): void {
       WorkflowSchema.parse(w);
       db.prepare(
-        'INSERT OR REPLACE INTO workflows (id, name, subtitle, revenue_usd, ord, steps) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(w.id, w.name, w.subtitle, w.revenueUsd, w.order, JSON.stringify(w.steps));
+        'INSERT OR REPLACE INTO workflows (id, name, subtitle, revenue_usd, ord, steps, ratio_target) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(w.id, w.name, w.subtitle, w.revenueUsd, w.order, JSON.stringify(w.steps), w.ratioTarget ?? null);
+      workflowVersions.record(w, note);
     },
-    /** Deletes one workflow by id: the builder's delete affordance. Distinct
-     *  from deleteWhereIdNotIn, which is the seed's bulk reconciliation. */
+    /** Deletes one workflow by id — the builder's delete affordance. Distinct
+     *  from `deleteWhereIdNotIn`, which is the seed's bulk reconciliation. */
     remove(id: string): void {
       db.prepare('DELETE FROM workflows WHERE id = ?').run(id);
     },
     deleteWhereIdNotIn(ids: string[]): void {
-      // An empty keep-list means "keep nothing": SQL rejects NOT IN ().
+      // An empty keep-list means "keep nothing": SQL rejects `NOT IN ()`.
       if (ids.length === 0) { db.prepare('DELETE FROM workflows').run(); return; }
       const placeholders = ids.map(() => '?').join(', ');
       db.prepare(`DELETE FROM workflows WHERE id NOT IN (${placeholders})`).run(...ids);
@@ -1961,6 +2209,8 @@ export function openDb(path: string) {
       ).run(s.id, s.name, s.category, s.description, s.ownerAgentId, s.status, JSON.stringify(s.tools), s.markdown, s.order);
     },
     deleteWhereIdNotIn(ids: string[]): void {
+      // An empty keep-list means "keep nothing": SQL rejects `NOT IN ()`.
+      if (ids.length === 0) { db.prepare('DELETE FROM skills').run(); return; }
       const placeholders = ids.map(() => '?').join(', ');
       db.prepare(`DELETE FROM skills WHERE id NOT IN (${placeholders})`).run(...ids);
     },
@@ -2022,62 +2272,47 @@ export function openDb(path: string) {
     },
   };
 
-  // Seat usage pushed from OTHER machines (this box's own seat is computed
-  // live by the connector, never stored). Payload is the whole validated
-  // snapshot: the shape is owned by lib/usage.ts and re-parsed on the way out.
-  const usageSnapshots = {
-    upsert(snap: SeatUsage): void {
-      db.prepare('INSERT OR REPLACE INTO usage_snapshots (id, captured_at, payload) VALUES (?, ?, ?)').run(
-        snap.id,
-        snap.capturedAt,
-        JSON.stringify(snap),
-      );
-    },
-    all(): SeatUsage[] {
-      return (db.prepare('SELECT payload FROM usage_snapshots').all() as { payload: string }[]).map((r) =>
-        UsageSnapshotSchema.parse(JSON.parse(r.payload)),
-      );
-    },
-  };
-
   return {
-    meta,
     departments,
     agents,
     tools,
     roadmap,
     metrics,
-    domains,
-    personas,
     phases,
     agentRuns,
     agentMessages,
     agentTasks,
     agentCrons,
-    cronRuns,
-    commsDigests,
-    plaudIngests,
-    digestReads,
+    brandDeals,
+    setupChecks,
     broadcasts,
     contactTags,
     social,
     emailList,
-    trading,
-    usageSnapshots,
-    metricSnapshots,
     socialPosts,
     funnel,
     people,
     sopTasks,
-    brandDeals,
-    leadMagnets,
-    proposals,
-    deliverableDecisions,
     workflows,
+    workflowVersions,
+    configVersions,
     skills,
+    /** Content Lab repository (lib/lab/store.ts). */
+    lab: labStore(db),
+    /* FounderOS UI merge repositories (lib/db-ext/*; tables in FO_DDL). */
+    trading: tradingRepo(db),
+    clientConfirmations: clientConfirmationsRepo(db),
+    clientWork: clientWorkRepo(db),
+    leadMagnets: leadMagnetsRepo(db),
+    usageReadings: usageReadingsRepo(db),
+    commsDigests: commsDigestsRepo(db),
+    callRecordings: callRecordingsRepo(db),
+    deliverableDecisions: deliverableDecisionsRepo(db),
+    cronRuns: cronRunsRepo(db),
+    /** The live journal mode, read from SQLite (S10 FR-17), e.g. "wal". */
+    journalMode: (): string => String(db.pragma('journal_mode', { simple: true }) ?? ''),
     close: () => db.close(),
   };
 }
 
-export type FounderDb = ReturnType<typeof openDb>;
-/** Legacy alias kept so existing call sites keep compiling. */
+export type GladosDb = ReturnType<typeof openDb>;

@@ -1,7 +1,7 @@
 import type { WallAd } from '@/lib/foreplay/wall';
 
 /**
- * The For-you feed's scoring: honest, local, and explainable: niche
+ * The For-you feed's scoring — honest, local, and explainable: niche
  * keyword fit + proven longevity + similarity to what the operator actually saved.
  * No black box: the UI states the ranking basis in a footer line, and every
  * factor here is inspectable. Saves teach the feed (driver-profile

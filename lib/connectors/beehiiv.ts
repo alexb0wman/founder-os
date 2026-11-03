@@ -1,12 +1,12 @@
-import { GATED, connected as gatedConnected } from '@/lib/connectors/demo-status';
 import type { ConnectorStatus } from '@/lib/connectors/types';
+import { runtimeEnv } from '@/lib/creds';
+import { TTL, keyTag, lastSwr, swr } from '@/lib/swr';
 
 // Beehiiv newsletter audience. Real-ready: honest `not_configured` until a key
 // lands, live subscriber count once it does. Same cache+timeout discipline as
 // the Zernio connector.
 
 const BEEHIIV_API = 'https://api.beehiiv.com/v2';
-const TTL_MS = 60_000;
 
 /** Map a Beehiiv `publications/{id}?expand[]=stats` payload to a subscriber
     count. Prefers active subscriptions; null when no usable number is present. */
@@ -22,37 +22,38 @@ function endpoint(pub: string): string {
   return `${BEEHIIV_API}/publications/${pub}?expand[]=stats`;
 }
 
-let cache: { at: number; data: number | null } | null = null;
+/** Beehiiv reads on the social window (lib/swr.ts), keyed by a tag of key + publication. A failed
+    call is not stored: the reader gets the last real answer it had, whatever its age, or null. */
+async function beehiivRead<T>(name: string, key: string, pub: string, load: () => Promise<T>): Promise<T | null> {
+  const k = `beehiiv:${name}:${keyTag(`${key}:${pub}`)}`;
+  try {
+    return await swr(k, TTL.social, load);
+  } catch {
+    return lastSwr<T>(k) ?? null;
+  }
+}
 
-/** Live subscriber count, 60s-cached; null when unconfigured or on error so
+/** Live subscriber count, cached (beehiivRead); null when unconfigured or on error so
     callers fall back to seeded history (never a fake number). */
 export async function beehiivSubscribers(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = runtimeEnv(),
 ): Promise<number | null> {
-  const now = Date.now();
-  if (cache && now - cache.at < TTL_MS) return cache.data;
   const key = env.BEEHIIV_API_KEY;
   const pub = env.BEEHIIV_PUBLICATION_ID;
   if (!key || !pub) return null;
-  try {
+  return beehiivRead('subscribers', key, pub, async () => {
     const res = await fetch(endpoint(pub), {
-      cache: 'no-store',
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(6000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const parsed = parseBeehiivStats(await res.json());
-    cache = { at: now, data: parsed?.subscribers ?? null };
-    return cache.data;
-  } catch {
-    return cache?.data ?? null;
-  }
+    return parseBeehiivStats(await res.json())?.subscribers ?? null;
+  });
 }
 
 export async function beehiivStatus(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = runtimeEnv(),
 ): Promise<ConnectorStatus> {
-  if (GATED) return gatedConnected('beehiiv', 'Beehiiv', 'social', 'newsletter · 4.8k subscribers');
   const key = env.BEEHIIV_API_KEY;
   const pub = env.BEEHIIV_PUBLICATION_ID;
   if (!key || !pub) {
@@ -66,7 +67,6 @@ export async function beehiivStatus(
   }
   try {
     const res = await fetch(endpoint(pub), {
-      cache: 'no-store',
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(6000),
     });
@@ -161,30 +161,22 @@ export function parseBeehiivPosts(raw: unknown): Newsletter[] {
   return out;
 }
 
-let postsCache: { at: number; data: Newsletter[] | null } | null = null;
-
-/** Live newsletters (posts + stats), 60s-cached; null when unconfigured or on
+/** Live newsletters (posts + stats), cached (beehiivRead); null when unconfigured or on
     error so callers fall back to the seed. */
 export async function beehiivPosts(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = runtimeEnv(),
 ): Promise<Newsletter[] | null> {
-  const now = Date.now();
-  if (postsCache && now - postsCache.at < TTL_MS) return postsCache.data;
   const key = env.BEEHIIV_API_KEY;
   const pub = env.BEEHIIV_PUBLICATION_ID;
   if (!key || !pub) return null;
-  try {
+  return beehiivRead('posts', key, pub, async () => {
     const url = `${BEEHIIV_API}/publications/${pub}/posts?expand[]=stats&limit=50&order_by=publish_date&direction=desc`;
     const res = await fetch(url, {
-      cache: 'no-store',
       headers: { Authorization: `Bearer ${key}` },
       signal: AbortSignal.timeout(8000),
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const list = parseBeehiivPosts(await res.json());
-    postsCache = { at: now, data: list.length > 0 ? list : null };
-    return postsCache.data;
-  } catch {
-    return postsCache?.data ?? null;
-  }
+    return list.length > 0 ? list : null;
+  });
 }

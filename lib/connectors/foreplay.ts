@@ -1,5 +1,5 @@
 /**
- * Foreplay connector: Adscout's data source: Spyder competitor tracking,
+ * Foreplay connector — Adscout's data source: Spyder competitor tracking,
  * the ~100M-ad Discovery database, and the operator's swipe file. Status is
  * key-presence plus the store's last-synced credit meter; it never spends
  * API credits just to render the Connections board.
@@ -11,7 +11,7 @@ import type { ConnectorStatus } from '@/lib/connectors/types';
 
 export async function foreplayStatus(): Promise<ConnectorStatus> {
   const base = { id: 'foreplay', name: 'Foreplay', kind: 'creative' } as const;
-  const key = resolveCred(FOREPLAY_KEY, [CRED_FILES.socialMedia, CRED_FILES.brainAgent]);
+  const key = resolveCred(FOREPLAY_KEY, [CRED_FILES.agentsEnv, CRED_FILES.socialMedia]);
   if (!key) {
     return {
       ...base,

@@ -1,71 +1,53 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { buildPaletteCommands, filterPalette, type PaletteAgent, type PaletteCommand } from '@/lib/palette';
-import { NAV_ORDER } from '@/lib/nav';
+import { ACTION_COMMANDS, filterCommands, type Command } from '@/lib/palette';
 
-const AGENTS: PaletteAgent[] = [
-  { id: 'inbox-triage', name: 'Inbox Triage', role: 'Communications' },
-  { id: 'markets', name: 'Markets Agent', role: 'Finances' },
+const COMMANDS: Command[] = [
+  { id: 'nav-home', label: 'Home', keywords: 'dashboard today overview', href: '/' },
+  { id: 'nav-agents', label: 'Agents', keywords: 'runtime run real', href: '/agents' },
+  { id: 'nav-connections', label: 'Connections', keywords: 'integrations tools status', href: '/integrations' },
+  { id: 'tool-gbrain', label: 'G-Brain', keywords: 'knowledge brain search supabase zeroentropy', href: '/integrations' },
+  { id: 'agent-inbox-triage', label: 'Inbox Triage', keywords: 'email imap unread', href: '/agents' },
 ];
 
-const cmds = buildPaletteCommands(AGENTS);
-
-describe('buildPaletteCommands', () => {
-  test('has a Go-to command for every nav view', () => {
-    const goHrefs = cmds.filter((c) => c.kind === 'go').map((c) => c.href);
-    for (const href of NAV_ORDER) expect(goHrefs).toContain(href);
+describe('filterCommands', () => {
+  test('returns everything for an empty query', () => {
+    expect(filterCommands(COMMANDS, '')).toEqual(COMMANDS);
   });
 
-  test('has one Run command per agent, carrying the agent id for the run POST', () => {
-    const runs = cmds.filter((c) => c.kind === 'run');
-    expect(runs).toHaveLength(AGENTS.length);
-    expect(runs.map((r) => r.agentId).sort()).toEqual(['inbox-triage', 'markets']);
-    expect(runs.every((r) => !r.href)).toBe(true);
+  test('matches case-insensitively on the label', () => {
+    const hits = filterCommands(COMMANDS, 'agents');
+    expect(hits.map((c) => c.id)).toContain('nav-agents');
   });
 
-  test('has Conductor Ask prompts (3+) plus a G-Brain jump', () => {
-    const asks = cmds.filter((c) => c.kind === 'ask');
-    const prompts = asks.filter((a) => a.prompt);
-    expect(prompts.length).toBeGreaterThanOrEqual(3);
-    // prompts are real messages, not labels
-    for (const p of prompts) expect(p.prompt!.length).toBeGreaterThan(10);
-    expect(asks.some((a) => a.href === '/brain')).toBe(true);
+  test('matches on keywords, not just labels', () => {
+    const hits = filterCommands(COMMANDS, 'unread');
+    expect(hits.map((c) => c.id)).toEqual(['agent-inbox-triage']);
   });
 
-  test('command ids are unique', () => {
-    const ids = cmds.map((c) => c.id);
-    expect(new Set(ids).size).toBe(ids.length);
+  test('ranks label prefix matches above keyword matches', () => {
+    const hits = filterCommands(COMMANDS, 'g');
+    expect(hits[0].id).toBe('tool-gbrain');
+  });
+
+  test('matches all terms of a multi-word query', () => {
+    expect(filterCommands(COMMANDS, 'brain search').map((c) => c.id)).toEqual(['tool-gbrain']);
+    expect(filterCommands(COMMANDS, 'brain zzz')).toEqual([]);
   });
 });
 
-describe('filterPalette', () => {
-  test('empty query returns everything in scope', () => {
-    expect(filterPalette(cmds, '', 'all')).toEqual(cmds);
-    expect(filterPalette(cmds, '', 'run').every((c) => c.kind === 'run')).toBe(true);
+describe('Toggle sidebar (SPEC S09 FR-15)', () => {
+  test('an action command with no destination, found by sidebar words', () => {
+    const toggle = ACTION_COMMANDS.find((c) => c.id === 'ui-sidebar');
+    expect(toggle).toMatchObject({ label: 'Toggle sidebar', action: 'sidebar:toggle' });
+    expect(toggle?.href).toBeUndefined();
+    for (const q of ['toggle sidebar', 'collapse', 'minimize nav', 'rail']) {
+      expect(filterCommands(ACTION_COMMANDS, q).map((c) => c.id), q).toContain('ui-sidebar');
+    }
   });
 
-  test('scope narrows to one kind', () => {
-    const asks = filterPalette(cmds, '', 'ask');
-    expect(asks.length).toBeGreaterThan(0);
-    expect(asks.every((c) => c.kind === 'ask')).toBe(true);
-  });
-
-  test('every word must match: "run inbox" finds the agent via its kind + name', () => {
-    const hits = filterPalette(cmds, 'run inbox', 'all');
-    expect(hits.map((c) => c.agentId)).toContain('inbox-triage');
-    expect(hits.every((c) => c.kind === 'run')).toBe(true);
-  });
-
-  test('nav aliases match: "gbrain" finds the /brain view', () => {
-    const hits = filterPalette(cmds, 'gbrain', 'go');
-    expect(hits.map((c) => c.href)).toContain('/brain');
-  });
-
-  test('"go comms" style: kind words match go commands', () => {
-    const hits = filterPalette(cmds, 'jump comms', 'all');
-    expect(hits.map((c) => c.href)).toContain('/comms');
-  });
-
-  test('garbage query matches nothing', () => {
-    expect(filterPalette(cmds, 'zzzqqq', 'all')).toEqual([]);
+  test('the layout puts the action commands in the palette', () => {
+    expect(readFileSync(join(process.cwd(), 'app/layout.tsx'), 'utf8')).toContain('...ACTION_COMMANDS');
   });
 });

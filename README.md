@@ -1,238 +1,154 @@
-# Founder OS
+# FounderOS
 
-**A personal operating system for a one-person business: a live web command
-center that runs your company as a set of AI-assisted "departments."**
+## Your AI-powered command center for a one-person company
 
-Founder OS turns the tabs, tools, and mental overhead of running a solo business
-into one screen: unified comms, a client funnel, social growth, finances, a
-knowledge graph, and a roster of named AI agents that each own a real job.
-
-This repository is the **open-source demo build**. It ships seeded with
-realistic placeholder data, so every page is alive out of the box with no
-accounts, no API keys, and nothing to configure. It's the same system taught,
-live, in the [Founder OS cohort](https://www.founderos.example.com); this repo lets
-you explore and run it yourself.
-
-> Want to build your own, live, with guidance? That's what the cohort is for.
-> [founderos.example.com](https://www.founderos.example.com)
-
----
-
-## Quick start
-
-Requires **Node 22**.
-
-```bash
-npm install
-cp .env.example .env.local   # optional; only needed to wire live integrations
-npm run dev                  # http://localhost:4100
-```
-
-A local SQLite database is **seeded with demo data on first run**, so every page
-is populated immediately. No credentials are required to browse. Navigate with
-the sidebar or the Command Palette (Cmd/Ctrl + K). Five themes ship, including
-the Monolith default (white on black, color means status only); pick it from the
-palette icon in the top bar.
-
-```bash
-npm run build && npm start   # production build
-npm test                     # vitest suite
-npm run typecheck            # tsc --noEmit
-npm run seed                 # re-seed the demo DB (idempotent)
-```
-
----
-
-## What you're looking at
-
-| Route | What it is |
-| --- | --- |
-| `/` | Operator console: pulse row, connections strip, agent list, knowledge core |
-| `/comms` | Unified inbox: email, Slack, WhatsApp, and dictation lanes in one feed |
-| `/funnel` | Living client-journey flow: a left-to-right neural view and a radial acquisition wheel, both fullscreenable |
-| `/social` | Growth dashboard: per-account follower charts, audience share, posting cadence |
-| `/content` | Content pipeline and calendar |
-| `/finances` | Income and expense charts, money-out views, expenses by category |
-| `/agents` | The AI agent roster, each with a real `run()` and last-run state |
-| `/tasks` | Task board fed by the agents |
-| `/skills` | Reusable, schedulable agent skills |
-| `/org` | Org hierarchy: operator, conductor, pillars, workers |
-| `/brain` | The knowledge core and graph (see **Knowledge layer** below) |
-| `/workflows` | Multi-step tool workflows |
-| `/integrations` | Live connections board with honest status for every connector |
-| `/analytics` | Real connector numbers and sparkline history |
-| `/roadmap`, `/reference` | Phases and quarters, and the reference model |
-| `/brand-deals` | Sponsorship pipeline as one slab: hatched funnel, deal volume meters, sortable deals, detail drawer |
-| `/trading` | Brokerage monitor: sleeve value line, agent reasoning, positions, open orders, trade log, guardrail limits with an Autopilot switch |
-| `/chats` | Chat hub: talk to any agent, with the Conductor routing |
-| `/adpilot`, `/blueprint` | Paid-media planner and the system blueprint |
-| `/doctor` | Health checks for the knowledge layer and connectors |
-| `/usage` | Token-burn board across model seats |
-| `/personas` | Persona templates that reskin the OS for other business types |
-
-Every screen runs the same interaction layer: a cursor spotlight across the whole viewport, a hover lens on every control, press-sink buttons, async idle → busy → done affordances, sliding tabs, and slab motion (cards rise in, lines draw, numerals count).
-
----
-
-## Architecture: demo-first, real-ready
-
-This is the load-bearing design rule. The demo looks alive because of rich
-seeded data, but **every page and API route reads through a repository layer**
-(never a raw query), and **every connector returns an honest status** (it never
-fakes "connected"). Swapping seeded tables for live sources is a repo-level
-change, not a rewrite.
-
-- **`lib/data.ts`**: `getDb()` app singleton; seeds on first touch.
-- **`lib/db.ts`**: `openDb()` plus typed repositories (`agents`, `departments`,
-  `social`, `funnel`, `finances`, and more).
-- **`lib/seed.ts`**: all seeded demo content lives here.
-- **`lib/schemas.ts`**: Zod schemas validate every row on the way **out** of the
-  DB, so bad data fails loud.
-- **`lib/connectors/*`**: 20+ connector groups (email/IMAP, Slack, Stripe,
-  Notion, calendar, CRM, social, and more). Each returns a typed
-  `ConnectorStatus` of `connected`, `not_configured`, or `error`: always the
-  truth, never a fake green light.
-- **`lib/agents/*`**: every seeded agent maps one-to-one to a runtime agent with
-  a real `run()`; runs persist and surface on `/agents`.
-
-New data means a new repo method, a Zod schema, a seed entry, and a test. Keep
-it that way.
-
----
-
-## Knowledge layer: G-Brain and Optimal Engine
-
-The `/brain` graph you see in the demo is the visible surface of a two-part
-knowledge system that powers the production build.
-
-### G-Brain, the knowledge base
-
-Plain **Markdown files are the source of truth**. They're chunked and embedded
-into a vector store, so one store answers both **keyword** and **semantic**
-queries (hybrid retrieval with reciprocal-rank fusion). If the vector backend is
-unreachable, retrieval falls back to a local grep over the markdown: fewer
-smarts, zero downtime. The demo ships a stub provider; the production provider
-reads a live markdown store and a vector index.
-
-### Optimal Engine, the governed memory runtime
-
-Where G-Brain stores documents, **Optimal Engine governs what the OS actually
-"knows."** It's the system of record for memory, organized as a
-**Tenant, Organization, Workspace, Node** topology, with a disciplined truth
-lifecycle:
-
-```
-Source -> Signal -> Claim -> Fact -> Memory
-```
-
-Raw sources produce signals; signals become claims; claims are reviewed and
-promoted into verified facts; facts distill into durable memories the agents
-draw on. Agents may write sources, signals, and pending claims, but **facts are
-promotion-gated**: nothing becomes "known" without passing review. That keeps
-the OS's memory trustworthy as it scales across workspaces.
-
-Together: **G-Brain is the library; Optimal Engine is the librarian and the
-system of record.** The agents query both before they act.
-
----
-
-## The full plan (production)
-
-The demo is self-contained (Next.js plus seeded SQLite). The production build
-keeps the same repo-layer contract and swaps in real backends:
-
-- **Hosting: [Railway](https://railway.app).** The Next.js app deploys as a
-  Railway service; the seeded SQLite store is replaced by a managed database,
-  and the knowledge services (G-Brain retrieval and Optimal Engine) run as
-  companion services alongside it. Env vars are managed per environment.
-- **Knowledge: G-Brain and Optimal Engine** become the live knowledge and memory
-  layer behind `/brain` and every agent.
-- **Connectors go live.** Because each connector already reports honest status,
-  wiring a real source (IMAP inboxes, Slack, Stripe, Notion, a CRM, calendar,
-  social) is just supplying credentials. The UI immediately reflects real state
-  instead of seeded data.
-- **Agents run for real.** Each agent's `run()` executes against the live
-  connectors and the knowledge layer, on a schedule, with runs persisted.
-
-Same interface you see in this demo, backed by your real business instead of
-placeholder data.
-
----
-
-## Project structure
-
-```
-app/                 Next.js App Router; one folder per view plus /api routes
-components/          UI: dashboard sections, graphs, terminal primitives
-lib/
-  data.ts db.ts      repository layer plus app DB singleton
-  seed.ts            all seeded demo content
-  schemas.ts         Zod schemas (validate every DB/API boundary)
-  connectors/        20+ honest-status integrations
-  agents/            agent registry plus runtimes
-  knowledge-graph.ts, memory-core.ts   brain graph plus memory model
-scripts/             seed plus doc-generation scripts
-tests/               vitest suite (one file per module)
-```
-
----
-
-## Configuration
-
-All configuration is via environment variables. Copy `.env.example` to
-`.env.local` and fill in only what you want to wire up; everything else stays in
-honest "not configured" mode. `.env.local` is gitignored.
-
-**Never commit real keys.** The demo runs fully without any of them.
-
----
+FounderOS brings the moving parts of a small business into one place: clients,
+comms, social growth, finances, knowledge, and a roster of AI-assisted agents.
+You set the direction; your departments and team work from the same operating
+picture.
 
 ## Tech stack
 
-- **Next.js 14** (App Router, server components) plus **TypeScript**
-- **Tailwind CSS**: monochrome "Monolith" theme with pickable colorways
-- **better-sqlite3**: seeded local store (WAL)
-- **Zod**: schema validation at every boundary
-- **Vitest**: test suite
-- **Vercel AI SDK**: agent LLM calls
-- **d3-force**, **lucide-react**, **simple-icons**: graph physics and iconography
+FounderOS is a single Node.js app. There is no separate backend, database
+server, or Docker setup to run.
 
----
+| Layer | What it uses |
+| --- | --- |
+| Runtime | Node.js 22 LTS (what CI runs), npm |
+| Framework | Next.js 14 (App Router), React 18, TypeScript 5 |
+| Styling | Tailwind CSS 3, PostCSS, Geist and Geist Mono (bundled locally), lucide-react, simple-icons |
+| Storage | SQLite through `better-sqlite3`, kept in local files under `data/` (your workspace) and `demo-data/` (the demo company) |
+| Validation | zod |
+| Visuals | d3-force for the knowledge graph |
+| AI | Vercel AI Gateway (`AI_GATEWAY_API_KEY`) for agent chat; `LLM_PROVIDER=stub` runs offline |
+| Integrations | IMAP/SMTP (imapflow, nodemailer), Slack, Notion, Stripe, iCal, plus HTTP connectors for the rest |
+| Tests and tooling | Vitest, `tsc --noEmit`, tsx for scripts, GitHub Actions CI (typecheck and tests on every push) |
 
-## Testing
+### What you need to run and build it
+
+**Required**
+
+- **Node.js 22 LTS** and **npm** (bundled with Node). CI runs on Node 22.
+  Newer releases can crash `better-sqlite3` inside the test runner (seen on
+  Node 24.20 as `Assertion failed: (env) != nullptr`), so use 22 if `npm test`
+  fails that way.
+- **Git**, to clone the repo.
+- **A C/C++ toolchain**, only if `better-sqlite3` has no prebuilt binary for
+  your platform and has to compile during `npm ci`:
+  - macOS: `xcode-select --install`
+  - Debian/Ubuntu: `sudo apt install build-essential python3`
+  - Windows: Visual Studio Build Tools with the "Desktop development with C++"
+    workload
+
+That is all the demo needs. No API keys, accounts, or database server.
+
+**Optional**
+
+- **Vercel AI Gateway key** (`AI_GATEWAY_API_KEY`), to talk to agents.
+- **Credentials for the tools you connect** (email, Slack, Notion, Stripe, and
+  others). See [Connect your tools](#connect-your-tools) and
+  [`.env.example`](.env.example).
+- **Bun and the G-Brain CLI**, for local knowledge search. See
+  [Optional knowledge search](#optional-knowledge-search).
+
+## Getting started
+
+### Prerequisites
+
+- Node.js 22 LTS
+- npm
+
+You do not need API keys or external accounts to try the demo. See
+[What you need to run and build it](#what-you-need-to-run-and-build-it) for the
+full list.
+
+### Clone the repo
 
 ```bash
-npm test          # run the full vitest suite
-npm run typecheck # tsc --noEmit
+git clone https://github.com/Bennettxai/FounderOS.git
+cd FounderOS
 ```
 
-Tests live in `tests/`, one file per module, using an in-memory SQLite pattern
-so they never touch the seeded dev DB.
+### Install dependencies
 
----
+```bash
+npm ci
+```
 
-## Deploying to Railway
+### Start FounderOS
 
-1. Create a Railway project and point it at this repo.
-2. Set the build command to `npm run build` and the start command to `npm start`
-   (the app serves on the `PORT` Railway provides).
-3. Add a database service and any connector credentials as environment variables
-   in the Railway dashboard.
-4. Deploy. The knowledge services (G-Brain and Optimal Engine) run as companion
-   services and are referenced by URL from the app's environment.
+```bash
+npm run dev
+```
 
----
+Open [http://localhost:4100](http://localhost:4100). On first start, FounderOS
+opens in demo mode with a fictional company, sample departments, agents, tasks,
+brand deals, social accounts, campaigns, and knowledge. Demo content is built
+under `demo-data/`; it never writes into your `data/` directory.
 
-## Note on the demo data
+## What you can do
 
-This is a demo build. All names, companies, clients, financial figures, and
-social numbers are **placeholder data**. Nothing here is real.
+- **Run your business:** use the command center, client funnel, inbox, finances,
+  and department workspaces to see what needs attention.
+- **Work with agents:** review the agent roster, task lanes, run history, and
+  conversations from the Agents board.
+- **Grow your audience:** manage social accounts, campaigns, brand deals, and
+  content workflows.
+- **Keep company context close:** search your knowledge base and connect the
+  tools your business already uses.
+
+FounderOS is useful without integrations. Unconfigured connectors stay clearly
+marked until you add credentials; the app does not pretend they are connected.
+
+## Connect your tools
+
+Open **Integrations** to configure the services you want to use, such as email,
+Slack, Notion, Attio, WhatsApp, Stripe, PayPal, Beehiiv, or Zernio. Keep keys in
+your local `.env.local` file; see [`.env.example`](.env.example) for supported
+environment variables. Never commit credentials.
+
+## Use your own business
+
+In **Settings**, turn **Filming mode** off to leave the fictional demo company
+and use your own workspace. Your `data/` directory starts blank. To have a fresh
+install start in this mode, set:
+
+```bash
+GLADOS_DEFAULT_MODE=real
+```
+
+## Keep it local or set a password
+
+On first run, FounderOS has no login and binds to `127.0.0.1`, so it is only
+reachable from your computer. Before accessing it from another device, open
+**Settings → Security** and set an operator password. FounderOS will then
+require that password for app pages and API routes.
+
+## Optional knowledge search
+
+FounderOS can search a local markdown knowledge base with the G-Brain CLI:
+
+```bash
+bun install -g github:garrytan/gbrain
+gbrain init --pglite --no-embedding
+gbrain import /path/to/your/notes --no-embed
+```
+
+Set `GBRAIN_BIN` and `GBRAIN_STORE` in `.env.local`. The embedded store is
+single-writer: use the CLI or a long-running `gbrain serve`, not both at once.
+
+## Development
+
+```bash
+npm test
+npm run typecheck
+npm run build
+```
+
+Use `npm run preview` to build and serve a production-like review version. It
+uses a separate `.next-preview` build directory, leaving the development
+server's `.next` output alone.
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
-
----
-
-Built as the reference implementation for **Founder OS**.
-[founderos.example.com](https://www.founderos.example.com)
+MIT. See [LICENSE](LICENSE).

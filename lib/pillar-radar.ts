@@ -3,7 +3,7 @@ import { orderGraphDepartments } from '@/lib/knowledge-graph';
 import { lifeAreaForDepartment } from '@/lib/life-map';
 
 /**
- * Per-pillar health for the spider chart beside the G-Brain monitor: one axis
+ * Per-pillar health for the spider chart beside the Optimal Engine monitor: one axis
  * per department, scored 15..100 from real signals —
  *   55% how much of the pillar's agent roster is active,
  *   30% how fresh its latest agent run is,

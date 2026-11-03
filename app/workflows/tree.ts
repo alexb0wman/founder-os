@@ -4,7 +4,7 @@ import type { WorkflowStep } from '@/lib/schemas';
  * Threads a workflow's flat, ordered step list into a rooted tree for the
  * expand-in-place view.
  *
- * Most steps still thread as a strict sequence: step i's parent is step
+ * Most steps still thread as a strict sequence — step i's parent is step
  * i-1, step 0 is the root. A step can override that by naming an explicit
  * `branch` (its declared parent's id + the condition that routes into it,
  * see `WorkflowBranchSchema` in lib/schemas.ts); two or more steps naming
@@ -27,7 +27,7 @@ export type WorkflowTreeNode = {
 
 export type WorkflowTree = {
   root: WorkflowTreeNode | null;
-  /** nodes actually reachable from the root: steps orphaned by a broken
+  /** nodes actually reachable from the root — steps orphaned by a broken
       parent pointer are dropped rather than silently mis-threaded */
   nodeCount: number;
   maxDepth: number;
@@ -38,7 +38,7 @@ const linearParent = (i: number) => (i === 0 ? null : i - 1);
 
 /**
  * Real topology: a step whose `branch` names a prior step's id threads
- * there instead of "the previous array slot": the parent-index override
+ * there instead of "the previous array slot" — the parent-index override
  * the module doc above describes. A step with no `branch`, or one whose
  * `branch.from` doesn't resolve to any step in this list, falls back to the
  * default linear parent so malformed data degrades to "still a sequence"
@@ -63,7 +63,7 @@ export function buildWorkflowTree(
   const nodes: WorkflowTreeNode[] = steps.map((step, index) => ({ step, index, depth: 0, children: [] }));
 
   // Group children by parent index, walking the source array in order so a
-  // parent's children list is always in original array order: rendering
+  // parent's children list is always in original array order — rendering
   // never depends on object identity or a Map's insertion-order quirks
   // beyond "earlier in the array, earlier in the tree."
   const childIndexesByParent = new Map<number, number[]>();
@@ -86,7 +86,7 @@ export function buildWorkflowTree(
 
   // Each index contributes to exactly one parent's child list (the forEach
   // above visits every i once), so this walk can never revisit a node or
-  // loop: the parent relation is a function, which makes the whole
+  // loop — the parent relation is a function, which makes the whole
   // structure a forest by construction. Reachability from the root, not
   // cycle-avoidance, is the only thing that can drop a step (see the
   // "unreachable" test).
@@ -107,7 +107,7 @@ export function buildWorkflowTree(
 /**
  * External systems (tool ids) a workflow touches, in first-seen order
  * across its steps, deduplicated. Feeds the collapsed card's "connected
- * systems" chips: honest to exactly what the steps declare, nothing added.
+ * systems" chips — honest to exactly what the steps declare, nothing added.
  */
 export function workflowToolIds(steps: WorkflowStep[]): string[] {
   const seen = new Set<string>();

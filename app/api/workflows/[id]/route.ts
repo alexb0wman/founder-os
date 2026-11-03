@@ -5,7 +5,7 @@ import { WorkflowInputSchema, buildWorkflowSteps } from '../shared';
 
 export const dynamic = 'force-dynamic';
 
-/** Updates an existing workflow's name, subtitle, and steps in place: the
+/** Updates an existing workflow's name, subtitle, and steps in place — the
  *  id, order, and revenue figure carry over untouched. Re-derives every
  *  step id from scratch (same `buildWorkflowSteps` the create route uses),
  *  so an edit that reorders or removes a step never leaves a stale branch
@@ -25,14 +25,15 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     revenueUsd: existing.revenueUsd,
     order: existing.order,
     steps: buildWorkflowSteps(existing.id, parsed.data.steps),
+    ...((parsed.data.ratioTarget ?? existing.ratioTarget) != null ? { ratioTarget: parsed.data.ratioTarget ?? existing.ratioTarget } : {}),
   };
   WorkflowSchema.parse(workflow);
-  db.workflows.insert(workflow);
-  return NextResponse.json({ workflow });
+  db.workflows.insert(workflow, parsed.data.note?.trim() || 'saved from the builder');
+  return NextResponse.json({ workflow, version: db.workflowVersions.latest(workflow.id) });
 }
 
 /** Deletes one workflow. The builder gates this behind an explicit confirm
- *  step client-side; the route itself just does the honest thing: 404 for
+ *  step client-side; the route itself just does the honest thing — 404 for
  *  an id that's already gone, 200 for a real delete. */
 export async function DELETE(_request: Request, { params }: { params: { id: string } }) {
   const db = getDb();

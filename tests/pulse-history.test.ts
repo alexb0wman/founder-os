@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { runsPerDay, inboundPerDay, stateOfWorld } from '@/lib/pulse-history';
+import { runsPerDay, inboundPerDay, stateOfWorld, statusPill } from '@/lib/pulse-history';
 
 const NOW = Date.parse('2026-07-13T12:00:00Z'); // days 07-07 … 07-13
 
@@ -41,48 +41,57 @@ describe('stateOfWorld — honest attention-first status line', () => {
   const base = {
     activeAgents: 5,
     totalAgents: 8,
-    connectorsDown: 0,
+    connected: 6,
+    totalConnectors: 6,
     inbound: 0,
-    health: 92,
-    brainConnected: true,
     failedRuns: 0,
   };
 
-  it('leads with "All nominal" when nothing needs attention', () => {
+  it('with nothing wrong, the pill reads "All nominal" and the segments are facts only', () => {
     const segs = stateOfWorld(base);
-    expect(segs[0]).toEqual({ text: 'All nominal', tone: 'ok' });
-    // mock 3a states the roster as "N live · N idle" and the brain score at
-    // every health, so the tail is three facts, not one fraction
-    expect(segs).toContainEqual({ text: '5 agents live', tone: 'ok' });
-    expect(segs).toContainEqual({ text: '3 idle', tone: 'dim' });
-    expect(segs).toContainEqual({ text: 'brain 92/100', tone: 'ok' });
+    expect(statusPill(segs)).toEqual({ text: 'All nominal', tone: 'ok' });
+    expect(segs).toEqual([{ text: '5/8 agents live', tone: 'ok', href: '/agents' }]);
   });
 
   it('surfaces failed runs first, in error tone', () => {
     const segs = stateOfWorld({ ...base, failedRuns: 2 });
-    expect(segs[0]).toEqual({ text: '2 runs failed', tone: 'err' });
-    expect(segs.some((s) => s.text === 'All nominal')).toBe(false);
+    expect(segs[0]).toEqual({ text: '2 runs failed', tone: 'err', href: '/agents' });
+    expect(statusPill(segs)).toEqual({ text: '1 needs attention', tone: 'err' });
   });
 
-  it('reports a degraded brain and down connectors', () => {
-    const segs = stateOfWorld({ ...base, health: 55, connectorsDown: 2 });
-    expect(segs).toContainEqual({ text: 'G-Brain degraded 55/100', tone: 'warn' });
-    expect(segs).toContainEqual({ text: '2 connectors down', tone: 'warn' });
+  it('the pill counts every warn and err segment and takes the worst tone (H2)', () => {
+    expect(statusPill(stateOfWorld({ ...base, connected: 4 }))).toEqual({ text: '1 needs attention', tone: 'warn' });
+    expect(statusPill(stateOfWorld({ ...base, connected: 4, failedRuns: 1 }))).toEqual({ text: '2 need attention', tone: 'err' });
   });
 
-  it('reports an offline brain as an error', () => {
-    const segs = stateOfWorld({ ...base, brainConnected: false, health: null });
-    expect(segs).toContainEqual({ text: 'G-Brain offline', tone: 'err' });
+  it('inbound is a fact, not a problem: it never flips the pill', () => {
+    expect(statusPill(stateOfWorld({ ...base, inbound: 22 }))).toEqual({ text: 'All nominal', tone: 'ok' });
   });
 
-  it('flags inbound needing reply', () => {
+  it('reports down connectors', () => {
+    const segs = stateOfWorld({ ...base, connected: 4, totalConnectors: 6 });
+    expect(segs).toContainEqual({ text: '2 connectors down', tone: 'warn', href: '/integrations' });
+  });
+
+  it('G-Brain health is no longer an input (F1): no brain segment ever', () => {
+    const segs = stateOfWorld({ ...base, failedRuns: 1, connected: 3 });
+    expect(segs.some((s) => /G-Brain/.test(s.text))).toBe(false);
+  });
+
+  it('reports inbound as arrivals in 24h, never "need reply" (H1)', () => {
     const segs = stateOfWorld({ ...base, inbound: 7 });
-    expect(segs).toContainEqual({ text: '7 inbound need reply', tone: 'accent' });
+    expect(segs).toContainEqual({ text: '7 inbound · 24h', tone: 'accent', href: '/inbox' });
+    expect(segs.some((s) => /reply/.test(s.text))).toBe(false);
   });
 
   it('singularizes one failed run and one connector down', () => {
-    const segs = stateOfWorld({ ...base, failedRuns: 1, connectorsDown: 1 });
-    expect(segs).toContainEqual({ text: '1 run failed', tone: 'err' });
-    expect(segs).toContainEqual({ text: '1 connector down', tone: 'warn' });
+    const segs = stateOfWorld({ ...base, failedRuns: 1, connected: 5, totalConnectors: 6 });
+    expect(segs).toContainEqual({ text: '1 run failed', tone: 'err', href: '/agents' });
+    expect(segs).toContainEqual({ text: '1 connector down', tone: 'warn', href: '/integrations' });
+  });
+
+  it('gives every fact segment the page it lives on (S10 FR-9)', () => {
+    const segs = stateOfWorld({ ...base, failedRuns: 1, connected: 5, inbound: 2 });
+    expect(segs.map((s) => s.href)).toEqual(['/agents', '/integrations', '/inbox', '/agents']);
   });
 });

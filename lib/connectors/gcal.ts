@@ -1,15 +1,17 @@
-import { GATED, connected as gatedConnected } from '@/lib/connectors/demo-status';
 import ical from 'node-ical';
 import type { ConnectorStatus } from '@/lib/connectors/types';
+import { isFilming, demoConnector } from '@/lib/demo-mode';
+import { runtimeEnv } from '@/lib/creds';
+import { TTL, keyTag, swr } from '@/lib/swr';
 
 /**
- * Google Calendar via CalDAV. Reuses whatever IMAP inbox app passwords are
- * configured (INBOX_*_*): a Google app password also authorizes the legacy
- * CalDAV endpoint (https://www.google.com/calendar/dav/{email}/events/) over
- * Basic auth, so a configured Gmail account gets its calendar with no extra
- * setup. Read-only: we REPORT events in a window, expand recurrences
- * client-side (Google's legacy CalDAV ignores server-side <expand>), and
- * surface a join URL (Meet / Zoom / Teams) per event.
+ * Google Calendar via CalDAV. Reuses the IMAP inbox app passwords (INBOX_*_*):
+ * a Google app password also authorizes the legacy CalDAV endpoint
+ * (https://www.google.com/calendar/dav/{email}/events/) over Basic auth, so the
+ * four already-configured Gmail accounts get calendars with zero extra setup.
+ * Read-only: we REPORT events in a window, expand recurrences client-side
+ * (Google's legacy CalDAV ignores server-side <expand>), and surface a join URL
+ * (Meet / Zoom / Teams) per event.
  */
 
 export type CalAccount = { user: string; pass: string; name: string; color: string };
@@ -30,7 +32,7 @@ export type CalEvent = {
 const CAL_COLORS = ['#3df08c', '#5ec9f8', '#e1306c', '#ffc53d'];
 
 /** Inbox slots whose host is Google → CalDAV-capable accounts. */
-export function caldavAccounts(env: Record<string, string | undefined> = process.env): CalAccount[] {
+export function caldavAccounts(env: Record<string, string | undefined> = runtimeEnv()): CalAccount[] {
   const out: CalAccount[] = [];
   for (let slot = 1; slot <= 4; slot++) {
     const host = env[`INBOX_${slot}_HOST`];
@@ -220,7 +222,7 @@ async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 /** Upcoming events across every Google calendar, sorted, within `days`. */
 export async function upcomingEvents(
-  env: Record<string, string | undefined> = process.env,
+  env: Record<string, string | undefined> = runtimeEnv(),
   opts: { days?: number; limit?: number; now?: Date } = {},
 ): Promise<CalEvent[]> {
   const { days = 14, limit = 25, now = new Date() } = opts;
@@ -230,6 +232,21 @@ export async function upcomingEvents(
   const endMs = startMs + days * 86_400_000;
   const startISO = new Date(startMs).toISOString();
   const endISO = new Date(endMs).toISOString();
+  // A CalDAV REPORT per account (up to 8s each) on every render of Comms and Home: on the comms
+  // window (lib/swr.ts) a real pull at most 30s old is reused, an older one (up to 5 min) while
+  // one refresh runs. Keyed by the accounts, the day and the window, so a new day pulls anew.
+  const key = `calendar:upcoming:${keyTag(JSON.stringify(accounts))}:${startMs}:${days}:${limit}`;
+  return swr(key, TTL.comms, () => pullUpcoming(accounts, startISO, endISO, startMs, endMs, limit));
+}
+
+async function pullUpcoming(
+  accounts: CalAccount[],
+  startISO: string,
+  endISO: string,
+  startMs: number,
+  endMs: number,
+  limit: number,
+): Promise<CalEvent[]> {
   const perAccount = await Promise.all(
     accounts.map(async (account) => {
       try {
@@ -243,8 +260,9 @@ export async function upcomingEvents(
   return mergeUpcoming(perAccount, limit);
 }
 
-export async function calendarStatus(env: Record<string, string | undefined> = process.env): Promise<ConnectorStatus> {
-  if (GATED) return gatedConnected('calendar', 'Calendar', 'calendar', 'Google Calendar · synced');
+export async function calendarStatus(env: Record<string, string | undefined> = runtimeEnv()): Promise<ConnectorStatus> {
+  // Filming mode: scripted stand-in (lib/demo-mode.ts)
+  if (isFilming()) return demoConnector('calendar')!;
   const accounts = caldavAccounts(env);
   if (accounts.length === 0) {
     return {

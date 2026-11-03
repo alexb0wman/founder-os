@@ -4,7 +4,7 @@ import { readWatchEntries } from '@/lib/foreplay/watchlist';
 import { digest, diffBrandAds, velocitySignal, type Signal } from '@/lib/foreplay/signals';
 
 /**
- * One Adscout sync cycle over the LOCAL watchlist (not Spyder: see
+ * One Adscout sync cycle over the LOCAL watchlist (not Spyder — see
  * watchlist.ts): per brand, recent ads + analytics through the public brand
  * endpoints, then the signal diff. Cost: ~2 calls per brand + 1 usage call
  * against the 10k/mo credit budget.
@@ -44,7 +44,7 @@ export async function runSyncCycle(client: ForeplayClient, now = new Date()): Pr
     adsSeen += next.length;
 
     // An ad we saw live before that is absent from an untruncated live pull
-    // has been turned off: surface that honestly so the killed signal fires.
+    // has been turned off — surface that honestly so the killed signal fires.
     const fullCoverage = newest.length < PAGE || oldest.length < PAGE || next.length < 2 * PAGE - 10;
     if (fullCoverage) {
       for (const old of prev) {
@@ -52,7 +52,7 @@ export async function runSyncCycle(client: ForeplayClient, now = new Date()): Pr
       }
     }
 
-    // Dead ads survive in the store so longevity history isn't lost -
+    // Dead ads survive in the store so longevity history isn't lost —
     // merge, with fresh rows winning.
     const merged = new Map(prev.map((a) => [a.id, a]));
     for (const ad of next) merged.set(ad.id, ad);
@@ -76,7 +76,7 @@ export async function runSyncCycle(client: ForeplayClient, now = new Date()): Pr
     adStore.writeUsage(usage);
     remainingCredits = usage.remaining_credits;
   } catch {
-    // usage is bookkeeping: a failed read never fails the cycle
+    // usage is bookkeeping — a failed read never fails the cycle
   }
 
   const apiCalls = client.callCount - startCalls;

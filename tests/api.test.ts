@@ -3,12 +3,13 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-// Route handlers read the DB path from FOUNDER_OS_DB at first access, so the
+// Route handlers read the DB path from GLADOS_DB at first access, so the
 // env var must be set before any handler module is imported. FUNNEL_PROVIDER
 // pins /api/funnel to the seeded set — tests never hit the live Attio API.
 beforeAll(() => {
-  process.env.FOUNDER_OS_DB = path.join(mkdtempSync(path.join(tmpdir(), 'founder-os-test-')), 'test.db');
+  process.env.GLADOS_DB = path.join(mkdtempSync(path.join(tmpdir(), 'glados-test-')), 'test.db');
   process.env.FUNNEL_PROVIDER = 'seed';
+  process.env.GBRAIN_BIN = path.join(tmpdir(), 'glados-no-gbrain-cli');
 });
 
 describe('API route handlers', () => {
@@ -36,7 +37,7 @@ describe('API route handlers', () => {
     const { GET } = await import('@/app/api/tools/route');
     const res = await GET();
     const body = await res.json();
-    expect(body.tools.length).toBeGreaterThanOrEqual(8);
+    expect(body.tools).toEqual([]);
   });
 
   test('POST /api/agents/[id]/run executes a real agent and persists the run', async () => {
@@ -55,16 +56,14 @@ describe('API route handlers', () => {
     const { GET } = await import('@/app/api/roadmap/route');
     const res = await GET();
     const body = await res.json();
-    expect(body.quarters.length).toBeGreaterThanOrEqual(3);
-    expect(body.quarters[0]).toHaveProperty('quarter');
-    expect(body.quarters[0]).toHaveProperty('items');
+    expect(body.quarters).toEqual([]);
   });
 
   test('GET /api/metrics returns analytics metrics', async () => {
     const { GET } = await import('@/app/api/metrics/route');
     const res = await GET();
     const body = await res.json();
-    expect(body.metrics.length).toBeGreaterThanOrEqual(4);
+    expect(body.metrics).toEqual([]);
   });
 
   test('POST /api/agents/broadcast fans a message out to every agent', async () => {
@@ -107,30 +106,23 @@ describe('API route handlers', () => {
     expect(body.doctor.detail.length).toBeGreaterThan(0);
   });
 
-  test('GET /api/social returns the growth dashboard with all five platforms', async () => {
+  test('GET /api/social returns the growth dashboard with the real accounts', async () => {
     const { GET } = await import('@/app/api/social/route');
     const res = await GET();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.platforms.map((p: { platform: string }) => p.platform)).toEqual([
-      'instagram',
-      'tiktok',
-      'twitter',
-      'youtube',
-      'linkedin',
-    ]);
-    expect(body.totalFollowers).toBeGreaterThan(0);
-    expect(body.platforms[0].growth).toHaveProperty('d7');
+    expect(body.platforms).toEqual([]);
+    expect(body.totalFollowers).toBe(0);
   });
 
-  test('GET /api/social includes email list, DM total, and monthly growth', async () => {
+  test('GET /api/social includes email list and DM totals, honestly empty', async () => {
     const { GET } = await import('@/app/api/social/route');
     const res = await GET();
     const body = await res.json();
     expect(body.emailList).toBeDefined();
-    expect(body.emailList.subscribers).toBeGreaterThan(0);
     expect(typeof body.totalDms).toBe('number');
-    expect(body.totalDms).toBeGreaterThan(0);
+    // nothing invented: zero DMs and no email history until connectors land
+    expect(body.totalDms).toBe(0);
     expect('monthlyGrowthPct' in body).toBe(true); // number | null, both valid
   });
 
@@ -143,12 +135,13 @@ describe('API route handlers', () => {
     expect(audBody.ranges).toEqual([7, 30, 60, 'all']);
     expect(Array.isArray(audBody.series)).toBe(true);
     expect(audBody.series.some((s: { key: string }) => s.key === 'all')).toBe(true);
-    expect(audBody.series.find((s: { key: string }) => s.key === 'all').points.length).toBeGreaterThan(0);
+    expect(audBody.series.find((s: { key: string }) => s.key === 'all').points.length).toBe(0);
 
     const dms = await GET(new Request('http://localhost/api/social/series?metric=dms'));
     const dmsBody = await dms.json();
     expect(dmsBody.metric).toBe('dms');
-    expect(dmsBody.series[0].points.length).toBeGreaterThan(0);
+    // zero DM history in the real seed
+    expect(dmsBody.series[0].points.length).toBe(0);
   });
 
   test('GET /api/social/series rejects an unknown metric', async () => {
@@ -162,25 +155,20 @@ describe('API route handlers', () => {
     const res = await GET(new Request('http://localhost/api/funnel'));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.summary.clients).toBeGreaterThanOrEqual(10);
+    expect(body.summary.clients).toBe(0);
     expect(body.summary.stages.map((s: { stage: string }) => s.stage)).toEqual([
       'first_touch', 'engaged', 'nurtured', 'opted_in', 'converted',
     ]);
-    expect(body.journeys.length).toBe(body.summary.clients);
-    expect(body.journeys[0].touches.length).toBeGreaterThanOrEqual(4);
-    // leads quiet past 90 days decay out of journeys into the archive
+    expect(body.journeys).toEqual([]);
     expect(Array.isArray(body.archived)).toBe(true);
-    expect(body.archived.length).toBeGreaterThanOrEqual(1);
-    expect(body.journeys.map((j: { id: string }) => j.id)).not.toContain(body.archived[0].id);
   });
 
   test('GET /api/funnel?venture= filters journeys to one venture', async () => {
     const { GET } = await import('@/app/api/funnel/route');
-    const res = await GET(new Request('http://localhost/api/funnel?venture=vantage'));
+    const res = await GET(new Request('http://localhost/api/funnel?venture=default'));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.journeys.length).toBeGreaterThan(0);
-    expect(body.journeys.every((j: { venture: string }) => j.venture === 'vantage')).toBe(true);
+    expect(body.journeys).toEqual([]);
   });
 
   test('GET /api/funnel rejects an unknown venture', async () => {
@@ -197,7 +185,7 @@ describe('API route handlers', () => {
       expect(key in body.audienceGrowth).toBe(true);
       expect(key in body.dmGrowth).toBe(true);
     }
-    expect(body.audienceTotal).toBeGreaterThan(0);
+    expect(body.audienceTotal).toBe(0);
   });
 
   test('POST /api/social/posts enqueues a post; GET lists the queue', async () => {
@@ -229,6 +217,36 @@ describe('API route handlers', () => {
     expect(bad.status).toBe(400);
   });
 
+  test('DELETE /api/social/posts withdraws queued posts only (H40)', async () => {
+    const route = await import('@/app/api/social/posts/route');
+    const { getDb } = await import('@/lib/data');
+    const del = (id?: string) =>
+      route.DELETE(
+        new Request(`http://localhost/api/social/posts${id === undefined ? '' : `?id=${encodeURIComponent(id)}`}`, {
+          method: 'DELETE',
+        }),
+      );
+
+    expect((await del()).status).toBe(400);
+    expect((await del('no-such-post')).status).toBe(404);
+
+    const made = await route.POST(
+      new Request('http://localhost/api/social/posts', {
+        method: 'POST',
+        body: JSON.stringify({ caption: 'withdraw me', platforms: ['linkedin'] }),
+      }),
+    );
+    const { post } = await made.json();
+    const ok = await del(post.id);
+    expect(ok.status).toBe(200);
+    expect(getDb().socialPosts.all().some((p) => p.id === post.id)).toBe(false);
+
+    getDb().socialPosts.enqueue({ ...post, id: 'already-out', status: 'published' });
+    const conflict = await del('already-out');
+    expect(conflict.status).toBe(409);
+    expect(getDb().socialPosts.all().some((p) => p.id === 'already-out')).toBe(true);
+  });
+
   test('GET /api/social/[platform] returns one platform’s analytics', async () => {
     const { GET } = await import('@/app/api/social/[platform]/route');
     const res = await GET(new Request('http://localhost/api/social/instagram'), {
@@ -236,9 +254,9 @@ describe('API route handlers', () => {
     });
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.account.platform).toBe('instagram');
-    expect(Array.isArray(body.snapshots)).toBe(true);
-    expect(body.snapshots.length).toBeGreaterThanOrEqual(1);
+    expect(body.platform).toBe('instagram');
+    expect(body.account).toBeNull();
+    expect(body.snapshots).toEqual([]);
   });
 
   test('GET /api/social/[platform] 404s for an untracked platform', async () => {
@@ -249,11 +267,11 @@ describe('API route handlers', () => {
     expect(res.status).toBe(404);
   });
 
-  test('GET /api/brain reports the real brain status, both halves named', async () => {
+  test('GET /api/brain reports real gbrain status', async () => {
     const { GET } = await import('@/app/api/brain/route');
     const res = await GET(new Request('http://localhost/api/brain'));
     const body = await res.json();
-    expect(body.provider).toBe('federated');
+    expect(body.provider).toBe('gbrain');
     expect(typeof body.connected).toBe('boolean');
     expect(body.detail.length).toBeGreaterThan(0);
   });
@@ -263,10 +281,10 @@ describe('API route handlers', () => {
     process.env.BRAIN_PROVIDER = 'stub';
     try {
       const { GET } = await import('@/app/api/brain/route');
-      const res = await GET(new Request('http://localhost/api/brain?q=vantage%20pool%20split'));
+      const res = await GET(new Request('http://localhost/api/brain?q=acme%20pool%20split'));
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.query).toBe('vantage pool split');
+      expect(body.query).toBe('acme pool split');
       expect(body.provider).toBe('stub');
       expect(Array.isArray(body.results)).toBe(true);
     } finally {

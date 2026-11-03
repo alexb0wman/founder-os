@@ -1,11 +1,13 @@
 import Link from 'next/link';
 import { ArrowLeft, ExternalLink, Mail } from 'lucide-react';
 import { getNewsletters } from '@/lib/newsletters';
-import { newsletterVolume } from '@/lib/newsletter-volume';
+import { newsletterVolume } from '@/founderos/lib/newsletter-volume';
 import { beehiivSubscribers } from '@/lib/connectors/beehiiv';
-import { NewsletterList } from '@/components/NewsletterList';
-import { Slab, SlabTitle, SlabCard, BigStat, Chip, MeterStack, InsightCard, PILL, PILL_ACCENT } from '@/components/slab';
-import { StepLine, DotMatrix } from '@/components/slab-charts';
+import { SetupLink } from '@/components/SetupLink';
+import { setupHrefFor } from '@/lib/integrations-catalog';
+import { NewsletterList } from '@/founderos/components/NewsletterList';
+import { Slab, SlabTitle, SlabCard, BigStat, Chip, MeterStack, InsightCard, PILL, PILL_ACCENT } from '@/founderos/components/slab';
+import { StepLine, DotMatrix } from '@/founderos/components/slab-charts';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,10 +28,11 @@ export default async function BeehiivDashboardPage() {
       <SlabTitle
         eyebrow="beehiiv · email list"
         title="Newsletter"
-        meta={live ? 'live via Beehiiv API' : 'seeded preview · add BEEHIIV_API_KEY for live'}
+        meta={live ? 'live via Beehiiv API' : 'seeded preview · not connected to Beehiiv'}
         right={
           <>
-            <Chip tone={live ? 'ok' : 'warn'}>{live ? 'beehiiv live' : 'seeded'}</Chip>
+            <Chip tone={live ? 'ok' : 'warn'}>{live ? 'beehiiv live' : 'Not configured'}</Chip>
+            {!live && <SetupLink href={setupHrefFor('beehiiv')} />}
             <Link href="/social" className={PILL}>
               <ArrowLeft className="h-3.5 w-3.5" /> All platforms
             </Link>

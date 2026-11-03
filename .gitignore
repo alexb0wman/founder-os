@@ -1,15 +1,8 @@
-node_modules/
+node_modules
 .next/
 .next-*/
-# The whole data dir, not just *.db / *.db-*. Those two patterns missed the
-# point-in-time snapshots (founder-os.db.bak-<sha> contains ".db.bak-", never
-# the literal ".db-"), so all 11 of them read as plain untracked files and
-# `git clean -fd` — the SAFE variant — deleted every backup of the database.
-# See OS-330. This still does nothing against `git clean -fdx`: -x means "also
-# remove ignored files", so gitignoring a database is a no-op against it. The
-# only real fix there is keeping the data outside the repo — see DATA_DIR in
-# lib/paths.ts and .env.example.
-data/
+data/*.db
+data/*.db-*
 *.tsbuildinfo
 next-env.d.ts
 .DS_Store
@@ -25,13 +18,29 @@ dir-sidebar.jpeg
 .env
 .env.local
 .env.*.local
+data/ad-intel/
 
-.vercel
+# Operator media and account data — never ship someone's identity assets.
+public/content-media/*
+!public/content-media/manifest.json
+data/higgsfield/
 
-# local run artifacts and caches, never source
-agents/markets/journal/
-rosters/
-data/candles/
-.sanitize.mjs
+# Generated on first run from the code templates.
+data/content-pipelines.json
+data/content-queue.json
 
-node_modules
+# Creative Engine: campaign documents, runs, ledger and rehosted Arcads assets are local state
+data/creative-engine/
+public/content-media/creative-engine/
+# Pre-rename names, kept until the /api/ad-engine alias is removed so a
+# half-migrated machine never stages real data (S02 FR-16)
+data/ad-engine/
+public/content-media/ad-engine/
+
+# Filming mode: the demo dataset and the switch file, both local only
+/demo-data/
+.glados-mode
+.glados-modules.json
+
+# Everything under data/ is per-machine state; none of it is ever tracked.
+/data/

@@ -1,7 +1,9 @@
 'use client';
 
+import { useGc } from '@/components/system-g/style-context';
 import { forwardRef, useImperativeHandle, useRef, useState, type CSSProperties } from 'react';
 import { Send, X } from 'lucide-react';
+import { BRAND } from '@/lib/brand';
 import type { HAny, HKind } from '@/lib/blueprint/hierarchy';
 
 export interface AskHandle {
@@ -35,12 +37,13 @@ type Answer = { state: 'thinking'; text: string } | { state: 'ok'; text: string;
 
 /**
  * The ask bar: AdPilot's frosted glass with the orbiting light, docked at
- * the bottom of the map. It knows what is selected: the scope chip takes
- * the selection's kind colour, the suggested questions change with it -
+ * the bottom of the map. It knows what is selected — the scope chip takes
+ * the selection's kind colour, the suggested questions change with it —
  * and the answer is grounded server-side in that scope's chain, members
  * and relations. `/` focuses it.
  */
 export const AskBar = forwardRef<AskHandle, { scope: HAny | null; onClearScope: () => void }>(function AskBar({ scope, onClearScope }, ref) {
+  const gc = useGc();
   const inputRef = useRef<HTMLInputElement>(null);
   const [value, setValue] = useState('');
   const [busy, setBusy] = useState(false);
@@ -74,13 +77,15 @@ export const AskBar = forwardRef<AskHandle, { scope: HAny | null; onClearScope: 
       <div className="bh-ask-glass" />
       <div className="bh-ask-inner">
         <div className="bh-ask-row">
-          <button type="button" className="pressable bh-ask-scope" title={scope ? 'Clear selection (esc)' : 'Ask about the whole system'} onClick={() => (scope ? onClearScope() : inputRef.current?.focus())}>
+          <button type="button" className={gc('bh-ask-scope g-chip', 'bh-ask-scope')} title={scope ? 'Clear selection (esc)' : 'Ask about the whole system'} onClick={() => (scope ? onClearScope() : inputRef.current?.focus())}>
             <i className="sw" />
-            <span>{scope ? `Ask about ${scope.name}` : 'Ask Founder OS'}</span>
+            <span>{scope ? `Ask about ${scope.name}` : `Ask ${BRAND.name}`}</span>
           </button>
           <input
             ref={inputRef}
             type="text"
+            className={gc('g-input kg-bp-ask-input', '') || undefined}
+            aria-label="Ask about the system"
             value={value}
             placeholder={scope ? `ask about ${scope.name}…` : 'ask anything about the system…'}
             autoComplete="off"
@@ -91,13 +96,13 @@ export const AskBar = forwardRef<AskHandle, { scope: HAny | null; onClearScope: 
               if (e.key === 'Escape') inputRef.current?.blur();
             }}
           />
-          <button type="button" className="pressable bh-ask-send" aria-label="Ask" onClick={() => void ask()}>
+          <button type="button" className={gc('bh-ask-send g-btn g-btn-icon g-btn-sm', 'bh-ask-send')} aria-label="Ask" onClick={() => void ask()}>
             <Send />
           </button>
         </div>
         <div className="bh-ask-chips">
           {chips.map((q) => (
-            <button key={q} type="button" className="pressable bh-ask-chip" onClick={() => void ask(q)}>
+            <button key={q} type="button" className={gc('bh-ask-chip g-chip', 'bh-ask-chip')} onClick={() => void ask(q)}>
               {q}
             </button>
           ))}
@@ -111,7 +116,7 @@ export const AskBar = forwardRef<AskHandle, { scope: HAny | null; onClearScope: 
                   scope: {answer.scope}
                   {answer.model ? ` · ${answer.model}` : ''}
                 </span>
-                <button className="pressable" type="button" onClick={() => setAnswer(null)}>
+                <button type="button" className={gc('g-btn g-btn-sm', '') || undefined} onClick={() => setAnswer(null)}>
                   <X /> clear
                 </button>
               </div>

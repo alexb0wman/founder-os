@@ -2,7 +2,7 @@ import type { ForeplayAd, ForeplayClient } from '@/lib/foreplay/client';
 import { daysRunning, hookLine } from '@/lib/foreplay/signals';
 
 /**
- * Concept mining: the two-stage funnel proven in-session (Charlie Morgan /
+ * Concept mining — the two-stage funnel proven in-session (Charlie Morgan /
  * "AI employees" runs): a concept is a family of phrasings, so it expands
  * into several probe queries against Discovery's searchable written layer,
  * results pool + dedupe, filter to proven (min days running, live), then the
@@ -83,7 +83,7 @@ export async function mineConcept(
         display_format: format,
       });
     } catch {
-      // one failed probe never sinks the mine: record it as zero
+      // one failed probe never sinks the mine — record it as zero
     }
     probeStats.push({ query, results: ads.length });
     for (const ad of ads) {

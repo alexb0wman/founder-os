@@ -1,18 +1,37 @@
 import { describe, expect, test } from 'vitest';
-import { screenTitleFor, describeFunnelContext } from '@/lib/screen-context';
+import { readFileSync } from 'node:fs';
+import { BRAND } from '@/lib/brand';
+import { plainScreenContext, screenTitleFor, describeFunnelContext } from '@/lib/screen-context';
 import { systemPromptFor } from '@/lib/agents/chat';
 import { realAgents } from '@/lib/agents/real';
 
 describe('screenTitleFor', () => {
   test('maps known routes to their nav labels, query strings included', () => {
     expect(screenTitleFor('/funnel')).toBe('Funnel');
-    expect(screenTitleFor('/funnel?venture=vantage&stage=nurtured')).toBe('Funnel');
+    expect(screenTitleFor('/funnel?venture=acme&stage=nurtured')).toBe('Funnel');
     expect(screenTitleFor('/')).toBe('Home');
-    expect(screenTitleFor('/brain')).toBe('G-Brain');
+    expect(screenTitleFor('/brain')).toBe('Optimal Engine');
+  });
+
+  test('nav relabels and palette-only views read their own names (S12 FR-9, FR-13, AC12.13)', () => {
+    expect(screenTitleFor('/database')).toBe('Brain Files');
+    expect(screenTitleFor('/org')).toBe('Org Chart');
+    expect(screenTitleFor('/social/beehiiv')).toBe('Social');
+    expect(screenTitleFor('/agents/setup/crm-pulse')).toBe('Agents');
+    expect(screenTitleFor('/creative-engine?engine=runs')).toBe('Creative Engine');
   });
 
   test('unknown paths fall back to the raw path', () => {
     expect(screenTitleFor('/nonexistent')).toBe('/nonexistent');
+  });
+});
+
+describe('plainScreenContext (glados-ui §3.6)', () => {
+  test('names the product by BRAND.name, never a literal', () => {
+    expect(plainScreenContext('Creative Engine')).toBe(`Creative Engine view of ${BRAND.name}.`);
+    for (const f of ['lib/screen-context.ts', 'app/api/conductor/context/route.ts']) {
+      expect(readFileSync(f, 'utf8')).not.toMatch(/view of GladOS/);
+    }
   });
 });
 

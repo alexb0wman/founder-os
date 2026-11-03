@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server';
+import { getDb } from '@/lib/data';
+import { foMode } from '@/lib/fo-sample';
 import { tradingPayload } from '@/lib/trading-payload';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
-/** The trading dashboard payload — every account's latest agent-fed snapshot,
- *  their positions and value series, recent activity, the agent's reasoning,
- *  live orders, the wallet and the honest connector status. Built by the same
- *  function the server page uses (lib/trading-payload.ts). */
-export async function GET() {
-  return NextResponse.json(await tradingPayload());
+/**
+ * The /trading payload (pages/trading.md §2). Reads SQLite and, when a wallet
+ * address is set, one cached public Solana RPC read. Spends nothing.
+ * `?sample=1` on a blank install, or Filming mode, answers the badged fixture
+ * with no outbound request.
+ */
+export async function GET(req: Request) {
+  const mode = foMode(req.url, getDb().trading.isEmpty());
+  return NextResponse.json(await tradingPayload(mode));
 }

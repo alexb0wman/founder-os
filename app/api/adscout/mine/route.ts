@@ -11,7 +11,7 @@ export const runtime = 'nodejs';
 /**
  * Concept mining: a concept expands into probe queries (Claude CLI when
  * available, deterministic fallback otherwise), each probe hits Discovery,
- * the pool dedupes and ranks by longevity. Explicit credit spend: this
+ * the pool dedupes and ranks by longevity. Explicit credit spend — this
  * route only runs when someone submits the mine prompt.
  */
 
@@ -27,7 +27,7 @@ async function expandProbes(concept: string): Promise<{ probes: string[]; expand
   const prompt = [
     'You expand an ad-concept into search queries for an ad-library keyword search (searches ad text, not transcripts).',
     `Concept: "${concept}"`,
-    'Reply with STRICT JSON only: an array of 4-6 short probe queries (2-5 words each): phrasings this concept leaves in real ad copy. Mix exact phrases and keyword pairs. No markdown.',
+    'Reply with STRICT JSON only: an array of 4-6 short probe queries (2-5 words each) — phrasings this concept leaves in real ad copy. Mix exact phrases and keyword pairs. No markdown.',
   ].join('\n');
   const res = await runClaude(prompt);
   if (res.ok) {
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
   const client = createForeplayClient();
   if (!client) {
     return NextResponse.json(
-      { ok: false, error: 'Foreplay not configured: set FOREPLAY_API_KEY in .env.local' },
+      { ok: false, error: 'Foreplay not configured — set FOREPLAY_API_KEY in .env.local' },
       { status: 503 },
     );
   }

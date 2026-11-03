@@ -5,42 +5,39 @@ import { describe, expect, test } from 'vitest';
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8');
 
 /**
- * Graph navigation contract (the operator, 2026-07-12): side paddles turn the
+ * Graph navigation contract : side paddles turn the
  * wheel from mid-height — never only from the top bar — and the detail card
  * carries an explicit trail: Back · <pillar> steps node → pillar; the pillar
  * bar's Back steps pillar → home.
  */
 describe('knowledge-graph wheel navigation', () => {
-  test('inline view: department nav is pinned bottom-center, always reachable', () => {
+  test('inline view: side paddles at mid-height turn the wheel', () => {
     const src = read('components/KnowledgeGraph.tsx');
     expect(src).toContain('Turn to the previous pillar');
     expect(src).toContain('Turn to the next pillar');
-    // one control at the bottom-center of the field (the operator), never a hidden edge paddle
-    expect(src).toMatch(/absolute bottom-4 left-1\/2 z-20 flex -translate-x-1\/2/);
+    // vertically centered on the canvas edges, not the top bar
+    expect(src).toMatch(/left-2 top-1\/2[^"]*-translate-y-1\/2/);
   });
 
-  test('inline detail card walks back up the trail to the pillar/directory', () => {
+  test('inline detail card walks back up the trail to the pillar', () => {
     const src = read('components/KnowledgeGraph.tsx');
-    // the shared top bar backs out to the focused pillar, or the directory at rest
-    expect(src).toMatch(/Back to the \$\{focusedTeam\?\.label \?\? 'directory'\}/);
+    expect(src).toMatch(/Back to the \$\{focusedTeam\?\.label \?\? 'graph'\} pillar/);
   });
 
-  test('fullscreen: department nav is pinned bottom-center, always visible', () => {
+  test('fullscreen: selector rides the top-left, paddles hug the edges', () => {
     const src = read('components/KnowledgeGraphFullscreen.tsx');
     expect(src).toMatch(/absolute left-5 top-5 z-20/); // compact pillar selector
-    // one nav control centered at the bottom, above every panel (z-40), so it is
-    // reachable no matter what card is open (the operator)
-    expect(src).toMatch(/absolute bottom-5 left-1\/2 z-40 flex -translate-x-1\/2/);
+    expect(src).toMatch(/left-2 top-1\/2 z-20/); // left paddle
     expect(src).not.toContain('left-5 top-1/2'); // the old mid-left docked panel is gone
   });
 
-  test('paddles stay pinned — no shifting when a detail card opens (the operator)', () => {
+  test('paddles stay pinned — no shifting when a detail card opens ', () => {
     // the arrow lives in ONE spot; a card may cover it, it never jumps around
     expect(read('components/KnowledgeGraphFullscreen.tsx')).not.toContain('right-[310px]');
     expect(read('components/KnowledgeGraph.tsx')).not.toContain('right-[264px]');
   });
 
-  test('no auto-popping roster card on the Clients pillar (the operator: reads as a bug)', () => {
+  test('no auto-popping roster card on the Clients pillar ', () => {
     const src = read('components/KnowledgeGraph.tsx');
     expect(src).not.toContain('ClientRosterCard');
     expect(src).not.toContain('rosterCard');
@@ -88,6 +85,20 @@ describe('knowledge-graph wheel navigation', () => {
     for (const m of block.matchAll(/:\s*([\d.]+)/g)) {
       expect(Number(m[1])).toBeGreaterThanOrEqual(0.9);
     }
+  });
+
+  test('the pillar ring holds a circle: teams are locked to their rest ring', () => {
+    // the operator 2026-09-01: "keep it in a circular configuration… the main
+    // pillars in the middle in a circle". An alpha-independent lock eases
+    // team nodes directly onto their rest targets; drags (fx/fy) still win,
+    // and branch nodes stay on the loose floaty hold.
+    const src = read('components/KnowledgeGraph.tsx');
+    expect(src).toMatch(/sim\.force\('pillarlock', pillarLock\)/);
+    expect(src).toMatch(/ns\.filter\(\(n\) => n\.kind === 'team'\)/);
+    expect(src).toMatch(/if \(d\.fx != null \|\| d\.fy != null\) continue;/);
+    // sector spans blend toward EQUAL spacing so the ring reads circular
+    const layout = read('lib/tree-layout.ts');
+    expect(layout).toMatch(/0\.45 \* \(w \/ total\) \+ 0\.55 \/ n/);
   });
 
   test('flanks show a transparent PORTION of their department; the rest is hidden', () => {

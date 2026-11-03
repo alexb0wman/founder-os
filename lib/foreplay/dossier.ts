@@ -2,11 +2,11 @@ import type { ForeplayClient, ForeplayAd, SpyderBrand } from '@/lib/foreplay/cli
 import { daysRunning, driverFingerprint, hookLine, winners } from '@/lib/foreplay/signals';
 
 /**
- * Sponsor ad dossier: the brand-deal lane. Given a sponsor's domain, pull
+ * Sponsor ad dossier — the brand-deal lane. Given a sponsor's domain, pull
  * every Foreplay brand profile publishing for it and answer the questions
  * that price a deal: how much are they actually running, is it growing,
  * what formats, what's their proven creative, and do they publish from more
- * than one page (multiple pages ≈ partner/whitelisted placements: the
+ * than one page (multiple pages ≈ partner/whitelisted placements — the
  * usage-rights conversation). Longevity and page count are honest public
  * observations; nothing here invents spend numbers.
  */
@@ -84,9 +84,9 @@ export async function buildBrandDossier(client: ForeplayClient, domain: string):
 /** Plain-text dossier for the terminal, Telegram, and the deal folder. */
 export function renderDossier(d: BrandDossier): string {
   const lines: string[] = [];
-  lines.push(`Ad dossier: ${d.domain}`);
+  lines.push(`Ad dossier — ${d.domain}`);
   lines.push(`Pages publishing: ${d.pages.map((p) => `${p.name}${p.activeAds != null ? ` (${p.activeAds} active)` : ''}`).join(', ')}`);
-  if (d.multiPage) lines.push(`Runs ads from ${d.pages.length} pages: partner/whitelisted placements likely; usage rights are worth pricing.`);
+  if (d.multiPage) lines.push(`Runs ads from ${d.pages.length} pages — partner/whitelisted placements likely; usage rights are worth pricing.`);
   lines.push(`Live ads seen: ${d.activeTotal} · formats: ${Object.entries(d.formatSplit).map(([f, n]) => `${f} ${n}`).join(', ') || 'none'}`);
   if (d.velocity.length > 0) {
     const first = d.velocity[0];

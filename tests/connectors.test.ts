@@ -12,33 +12,33 @@ describe('parseInboxConfigs', () => {
   test('parses up to four complete inbox slots', () => {
     const env = {
       INBOX_1_HOST: 'imap.gmail.com',
-      INBOX_1_USER: 'admin@founderos.example.com',
+      INBOX_1_USER: 'admin@glados.ai',
       INBOX_1_PASS: 'app-pass-1',
       INBOX_2_HOST: 'imap.gmail.com',
-      INBOX_2_USER: 'alex@launchpadcohort.example.com',
+      INBOX_2_USER: 'two@example.com',
       INBOX_2_PASS: 'app-pass-2',
-      INBOX_2_NAME: 'LC Execs',
+      INBOX_2_NAME: 'LC Main',
       INBOX_3_HOST: 'imap.fastmail.com',
       INBOX_3_PORT: '1993',
-      INBOX_3_USER: 'ops@vantage.example.com',
+      INBOX_3_USER: 'ops@acme.co',
       INBOX_3_PASS: 'app-pass-3',
       INBOX_4_HOST: 'imap.gmail.com',
-      INBOX_4_USER: 'personal@gmail.com',
+      INBOX_4_USER: 'user@example.com',
       INBOX_4_PASS: 'app-pass-4',
     };
     const inboxes = parseInboxConfigs(env);
     expect(inboxes).toHaveLength(4);
     expect(inboxes[0]).toEqual({
       id: 'inbox-1',
-      name: 'admin@founderos.example.com',
+      name: 'admin@glados.ai',
       host: 'imap.gmail.com',
       port: 993,
-      user: 'admin@founderos.example.com',
+      user: 'admin@glados.ai',
       pass: 'app-pass-1',
       smtpHost: 'smtp.gmail.com', // imap. → smtp. default
       smtpPort: 465,
     });
-    expect(inboxes[1].name).toBe('LC Execs');
+    expect(inboxes[1].name).toBe('LC Main');
     expect(inboxes[2].port).toBe(1993);
   });
 

@@ -7,13 +7,13 @@ import { isValidCron } from '@/lib/cron';
  * Two properties matter:
  *  - wall-clock local time, because "9am" means 9am where the operator is, and
  *    the host runs in that timezone;
- *  - catch-up. the host is rebuilt by the autodeploy daemon whenever main
- *    moves, so the process is routinely restarted. A 09:00 job must still run
- *    if the box only came back at 09:06 — comparing the last run against the
- *    last SCHEDULED occurrence gives that for free, and also makes a double
- *    fire impossible inside one window.
+ *  - catch-up. The host process restarts on every deploy, so a 09:00 job
+ *    must still run if the box only came back at 09:06. Comparing the last
+ *    run against the last SCHEDULED occurrence gives that for free, and also
+ *    makes a double fire impossible inside one window.
  *
- * Pure and injectable; the loop lives in app/api/cron/tick/route.ts.
+ * Pure and injectable. Ported verbatim from the 2026-10-06 parts bin (which
+ * ported FounderOS); the runner is lib/cron-runner.ts, the loop lib/cron-loop.ts.
  */
 export type SchedulableCron = {
   id: string;
@@ -81,14 +81,13 @@ export function lastScheduledOccurrence(expr: string, now: Date): Date | null {
   return null;
 }
 
-
 /** How far forward to look for the next window before giving up (8 days). */
 const LOOKAHEAD_MINUTES = LOOKBACK_MINUTES;
 
 /**
  * The next minute strictly after `now` when this expression fires, or null
- * if nothing matches within the lookahead. Powers the "next 8h" copy on the
- * /tasks cron cards · display only, the runner keeps its own due logic.
+ * if nothing matches within the lookahead. Display only; the runner keeps its
+ * own due logic.
  */
 export function nextScheduledOccurrence(expr: string, now: Date): Date | null {
   if (!isValidCron(expr)) return null;

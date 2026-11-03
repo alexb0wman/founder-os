@@ -1,27 +1,22 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/data';
-import { UsageSnapshotSchema } from '@/lib/usage';
+import { authorizePush } from '@/lib/push-auth';
+import { UsagePushSchema } from '@/lib/schemas';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 /**
- * Another machine reporting its seat. A second host pushes here so this board
- * shows both subscriptions (and vice versa in dev). Whatever arrives is stored
- * as source 'push' regardless of what the sender claimed (provenance is the
- * receiver's fact to assert) and capturedAt tells the reader how old the
- * reading is.
+ * Another machine's usage push (pages/usage.md §2):
+ *   { machine, readings: [{ plan: claude|codex|ollama, day: YYYY-MM-DD, model, input, output, cacheWrite }] }
+ * `Authorization: Bearer <USAGE_PUSH_TOKEN>`; a bad token is 401 and writes
+ * nothing (U-5). Each (plan, day) named replaces that machine's rows for it.
  */
 export async function POST(req: Request) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 });
-  }
-  const parsed = UsageSnapshotSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ ok: false, error: parsed.error.issues[0]?.message ?? 'invalid snapshot' }, { status: 400 });
-  }
-  getDb().usageSnapshots.upsert({ ...parsed.data, source: 'push' });
-  return NextResponse.json({ ok: true, id: parsed.data.id });
+  const auth = authorizePush(req, 'USAGE_PUSH_TOKEN');
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const parsed = UsagePushSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'invalid push', issues: parsed.error.flatten() }, { status: 400 });
+  const stored = getDb().usageReadings.replaceForMachine(parsed.data.machine, parsed.data.readings);
+  return NextResponse.json({ ok: true, machine: parsed.data.machine, stored });
 }

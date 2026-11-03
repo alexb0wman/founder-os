@@ -1,5 +1,6 @@
 'use client';
 
+import { useGc } from '@/components/system-g/style-context';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, type AnimationEvent, type CSSProperties, type PointerEvent as RPointerEvent, type WheelEvent as RWheelEvent } from 'react';
 import { ChevronDown } from 'lucide-react';
 import type { Hierarchy, HierarchyIndex, HContainer, HGroup } from '@/lib/blueprint/hierarchy';
@@ -39,11 +40,12 @@ const EASE = (t: number) => 1 - Math.pow(1 - t, 5);
  * The stage: containers, frames and cards as positioned HTML over two SVG
  * layers (structural traces below, the selection's relations on top), a
  * pan/zoom camera that mutates the world transform directly (no React
- * render per frame), and the perf rules learned on the concept: the dot
+ * render per frame), and the perf rules learned on the concept — the dot
  * grid lives in screen space, `will-change` only on the world, blur and
  * backdrop filters drop while the camera moves.
  */
 export const HierarchyCanvas = forwardRef<CanvasHandle, Props>(function HierarchyCanvas({ h, idx, layout, spine, focusEdges, focusColor, focus, lit, onSelect, onToggle, onFly }, ref) {
+  const gc = useGc();
   const canvasRef = useRef<HTMLDivElement>(null);
   const worldRef = useRef<HTMLDivElement>(null);
   const flareRef = useRef<SVGGElement>(null);
@@ -314,7 +316,7 @@ export const HierarchyCanvas = forwardRef<CanvasHandle, Props>(function Hierarch
   const focusStyle = focusColor ? ({ '--ec': focusColor } as CSSProperties) : undefined;
 
   return (
-    <div ref={canvasRef} className="bh-canvas" tabIndex={0} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onWheel={onWheel} onDoubleClick={onDoubleClick}>
+    <div ref={canvasRef} className="bh-canvas" data-matrix-skip tabIndex={0} data-g-exempt={gc('pan and zoom surface of the map: focusable for keyboard panning, not a button', '') || undefined} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onWheel={onWheel} onDoubleClick={onDoubleClick}>
       <div ref={spotRef} className="bh-glow-spot" />
       <div ref={worldRef} className="bh-world">
         <svg className="bh-edges" xmlns="http://www.w3.org/2000/svg">
@@ -409,10 +411,10 @@ export const HierarchyCanvas = forwardRef<CanvasHandle, Props>(function Hierarch
         </div>
       </div>
       <div className="bh-hud bh-hud-zoom">
-        <button type="button" className="pressable bh-hud-btn" aria-label="Zoom in" onClick={() => tween(zoomCam(cam.current, 1.25, view().w / 2, view().h / 2), 260)}>
+        <button type="button" className={gc('bh-hud-btn g-btn g-btn-icon g-btn-sm', 'bh-hud-btn')} aria-label="Zoom in" onClick={() => tween(zoomCam(cam.current, 1.25, view().w / 2, view().h / 2), 260)}>
           <PlusIcon />
         </button>
-        <button type="button" className="pressable bh-hud-btn" aria-label="Zoom out" onClick={() => tween(zoomCam(cam.current, 0.8, view().w / 2, view().h / 2), 260)}>
+        <button type="button" className={gc('bh-hud-btn g-btn g-btn-icon g-btn-sm', 'bh-hud-btn')} aria-label="Zoom out" onClick={() => tween(zoomCam(cam.current, 0.8, view().w / 2, view().h / 2), 260)}>
           <MinusIcon />
         </button>
         <div ref={pctRef} className="bh-hud-pct">

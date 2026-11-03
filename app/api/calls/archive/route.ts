@@ -1,39 +1,42 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
-import { archiveStatus, getArchiveJob, startArchiveJob, type ArchiveSource } from '@/lib/call-archive';
-import { gbrainStorePath } from '@/lib/connectors/gbrain';
-import { resolveAttioKey, resolveCred, CRED_FILES } from '@/lib/creds';
+import { getDb } from '@/lib/data';
+import { fathomKey, pullFathomMeetings } from '@/lib/connectors/fathom';
+import { plaudIngestConfigured } from '@/lib/connectors/plaud';
+import { foMode, sampleRecordings } from '@/lib/fo-sample';
+import { setupHrefFor } from '@/lib/integrations-catalog';
+import { CallRecordingSourceSchema } from '@/lib/schemas';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 /**
- * The call archive. GET: how many call pages the brain-store holds per
- * source, plus the running/last export job. POST {sources?: ['attio','fathom']}:
- * start an export into this box's brain-store (returns at once; poll GET).
- * Pure code, no LLM; safe to run on the host with the seats paused.
+ * The recordings archive (pages/feature-additions.md F4): Plaud (pushed) and
+ * Fathom (pulled) in one list, newest first, `?source=plaud|fathom` filters.
+ * The Fathom pull is a free read, at most once per 10 minutes per process,
+ * and is upserted into call_recordings; without FATHOM_API_KEY nothing leaves
+ * the box. A Fathom failure is reported per source and never blanks the list.
  */
-function jobView() {
-  const j = getArchiveJob();
-  if (!j) return null;
-  const { done: _done, ...rest } = j;
-  return rest;
-}
-
-export async function GET() {
-  return NextResponse.json({ archive: archiveStatus(gbrainStorePath()), job: jobView() }, { headers: { 'Cache-Control': 'no-store' } });
-}
-
-const Body = z.object({ sources: z.array(z.enum(['attio', 'fathom'])).min(1).optional() });
-
-export async function POST(req: Request) {
-  const parsed = Body.safeParse(await req.json().catch(() => ({})));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  const sources: ArchiveSource[] = parsed.data.sources ?? ['attio', 'fathom'];
-  const job = startArchiveJob({
-    sources,
-    storeDir: gbrainStorePath(),
-    keys: { attio: resolveAttioKey(), fathom: resolveCred('FATHOM_API_KEY', [CRED_FILES.brainAgent, CRED_FILES.socialMedia]) },
-  });
-  return NextResponse.json({ started: job.startedAt, state: job.state, sources: job.sources }, { status: 202, headers: { 'Cache-Control': 'no-store' } });
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const rawSource = url.searchParams.get('source');
+  const source = rawSource ? CallRecordingSourceSchema.safeParse(rawSource) : null;
+  if (source && !source.success) return NextResponse.json({ error: 'source must be plaud or fathom' }, { status: 400 });
+  const db = getDb();
+  const mode = foMode(req.url, db.callRecordings.count() === 0 && !fathomKey());
+  const sources = {
+    plaud: { configured: plaudIngestConfigured(), error: null as string | null, setupHref: setupHrefFor('plaud') },
+    fathom: { configured: Boolean(fathomKey()), error: null as string | null, setupHref: setupHrefFor('fathom') },
+  };
+  if (mode !== 'live') {
+    const all = sampleRecordings();
+    return NextResponse.json({ recordings: source?.success ? all.filter((r) => r.source === source.data) : all, sources, mode, sample: true });
+  }
+  if (sources.fathom.configured) {
+    try {
+      for (const m of await pullFathomMeetings()) db.callRecordings.upsert({ ...m, source: 'fathom' });
+    } catch (err) {
+      sources.fathom.error = err instanceof Error ? err.message : String(err);
+    }
+  }
+  return NextResponse.json({ recordings: db.callRecordings.recent(200, source?.success ? source.data : undefined), sources, mode, sample: false });
 }

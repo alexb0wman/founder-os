@@ -12,15 +12,15 @@ function graph(): BlueprintGraph {
     { id: 'dept-sales', kind: 'department', name: 'Sales', layer: 2, status: 'live', blurb: 'pipeline', facts: {}, icon: 'folder' },
     { id: 'dept-finance', kind: 'department', name: 'Finances', layer: 2, status: 'live', blurb: 'books', facts: {}, icon: 'folder' },
     { id: 'dept-tech', kind: 'department', name: 'TECH', layer: 2, status: 'live', blurb: 'the OS', facts: {}, icon: 'folder' },
-    { id: 'agent-atlas', kind: 'agent', name: 'Atlas', layer: 2, status: 'live', blurb: '', facts: { role: 'Sales' }, icon: 'bot' },
-    { id: 'agent-nova', kind: 'agent', name: 'Nova', layer: 2, status: 'live', blurb: '', facts: { role: 'Auditor' }, icon: 'bot' },
+    { id: 'agent-drake', kind: 'agent', name: 'Drake', layer: 2, status: 'live', blurb: '', facts: { role: 'Sales' }, icon: 'bot' },
+    { id: 'agent-yeat', kind: 'agent', name: 'Yeat', layer: 2, status: 'live', blurb: '', facts: { role: 'Auditor' }, icon: 'bot' },
   ];
   const edges: BlueprintGraph['edges'] = [
     { from: 'operator', to: 'agent-conductor', kind: 'commands' },
-    { from: 'agent-conductor', to: 'agent-atlas', kind: 'commands' },
-    { from: 'agent-conductor', to: 'agent-nova', kind: 'commands' },
-    { from: 'agent-atlas', to: 'dept-sales', kind: 'member-of' },
-    { from: 'agent-nova', to: 'dept-tech', kind: 'member-of' },
+    { from: 'agent-conductor', to: 'agent-drake', kind: 'commands' },
+    { from: 'agent-conductor', to: 'agent-yeat', kind: 'commands' },
+    { from: 'agent-drake', to: 'dept-sales', kind: 'member-of' },
+    { from: 'agent-yeat', to: 'dept-tech', kind: 'member-of' },
   ];
   return { nodes, edges, compiledAt: new Date().toISOString() } as BlueprintGraph;
 }

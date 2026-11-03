@@ -1,18 +1,21 @@
 import type { CommsItem } from '@/lib/comms';
 
 /**
- * The 9am comms digest: who the operator actually needs to respond to.
+ * The morning digest: who the operator actually needs to respond to.
+ * Ported verbatim from the 2026-10-06 parts bin, which ported FounderOS
+ * (FounderOS UI merge, pages/feature-additions.md F3). Rule-based, no LLM (T11).
  *
- * The priority order it encodes, highest first: people you have a call with
- * today, then clients and prospects, then students and family asking about
- * cohort work, then group chats, then brand-deal threads, and last anything
- * from a company or a piece of software. People rank above systems.
+ * Priority order, highest first: people you have a call with, then clients
+ * and prospects, then people (tagged contacts and anyone human), then brand
+ * deals, then group chats, and last anything from a company or a piece of
+ * software. People rank above systems.
  *
- * Everything here is pure so the ranking is unit-testable; the connectors are
- * gathered in lib/comms-digest-run.ts and the job is fired by the cron tick.
- * The rule that matters most: a real human NEVER falls into `noise`. Only
- * detected bulk/automated senders do, because that tier is also the
- * unsubscribe list and dropping a client into it would lose the client.
+ * Pure, so the ranking is unit-testable; the connectors are gathered in
+ * lib/comms-digest-run.ts and the 07:00 job is fired by lib/cron-runner.ts. The rule that matters most: a real human NEVER falls
+ * into `noise`. Only detected bulk/automated senders do, because that tier is
+ * also the unsubscribe list and dropping a client into it would lose them.
+ *
+ * Client-safe: no connector or node imports, so the panel can use the helpers.
  */
 
 /** Priority order, highest first. Index doubles as the sort rank. */
@@ -20,12 +23,20 @@ export const TIER_ORDER = ['call', 'client', 'people', 'branddeal', 'group', 'no
 export type DigestTier = (typeof TIER_ORDER)[number];
 
 export type DigestContext = {
-  /** Calendar event titles in/near the window — "people I have calls with". */
+  /** Calendar event titles in/near the window: "people I have calls with". */
   meetingTitles: string[];
-  /** Client + prospect names (Attio roster, proposal recipients). */
+  /** Client and prospect names (the Attio roster). */
   clientNames: string[];
-  students: string[];
-  family: string[];
+  /** People tagged in contact_tags (any tag). */
+  tagged: string[];
+  /** Open brand deals from bdpilot: brand names and contact addresses. */
+  brandDeals: string[];
+  /**
+   * The operator's own name, brands and ventures (COMMS_OWN_NAMES). A calendar
+   * full of your own company name would otherwise put every sender carrying
+   * that name into the call tier, so these words never identify a person.
+   */
+  ownNames?: string[];
   now: number;
 };
 
@@ -40,6 +51,7 @@ export type DigestEntry = {
   ts: string;
   replyTo?: string;
   account?: string;
+  jid?: string;
   /** true when this rode over from an earlier report instead of arriving today */
   carried?: boolean;
   /** when it FIRST appeared in a report; set once and never moved */
@@ -59,48 +71,43 @@ export type CommsDigest = {
   needsReply: number;
 };
 
-const WINDOW_HOURS = 24;
+export const WINDOW_HOURS = 24;
 
 /**
- * How long an unanswered entry keeps riding along.
- *
- * the operator, 2026-08-19: "if I don't clear out all of the people in that report,
- * I want you to stack the new report on top of the old one." The 24h window
- * still decides what is NEW; this decides how long something he never answered
- * stays in front of him. A cap exists so a month of ignored newsletters cannot
- * grow the report without bound.
+ * How long an unanswered entry keeps riding along. The 24h window decides
+ * what is NEW; this decides how long something never answered stays in front
+ * of the operator. Capped so a month of ignored newsletters cannot grow the
+ * report without bound.
  */
 export const CARRY_MAX_DAYS = 30;
 
 /**
  * How long a "cleared" mark is kept. MUST exceed CARRY_MAX_DAYS: if a read key
- * were pruned while its entry could still be carried, the entry would come back
- * the next morning as though he had never answered it. That is the exact bug
- * the old hand-written 7 days would have caused the moment carrying shipped.
+ * were pruned while its entry could still be carried, the entry would come
+ * back the next morning as though it had never been answered.
  */
 export const READ_RETENTION_DAYS = CARRY_MAX_DAYS + 15;
 
 const norm = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
-/** Tokens worth matching on: drops initials and filler that match everything. */
-function tokens(s: string): string[] {
-  return norm(s)
-    .split(' ')
-    .filter((t) => t.length >= 3 && !STOP.has(t));
-}
-
-/**
- * Words that never identify a PERSON. The operator's own brands are in here
- * deliberately: a calendar full of one company name would otherwise put every
- * sender carrying that name into the call tier.
- */
+/** Words that never identify a PERSON: filler, mail words, role words. */
 const STOP = new Set([
   'the', 'and', 'com', 'net', 'org', 'call', 'with', 'meeting', 'sync', 'chat', 'zoom', 'meet',
-  're', 'fwd', 'gmail', 'group', 'inc', 'llc', 'ltd', 'team', 'founder', 'rivera',
-  // brands, ventures and role words, not names
-  'vantage', 'founderos', 'founder', 'launchpad cohort', 'launchpad cohorts', 'agency', 'cohort', 'core',
-  'sales', 'demo', 'ops', 'support', 'admin', 'invited', 'you', 'new', 'via', 'linkedin',
+  're', 'fwd', 'gmail', 'group', 'inc', 'llc', 'ltd', 'team', 'founder', 'agency', 'cohort', 'core',
+  'sales', 'demo', 'ops', 'support', 'admin', 'invited', 'you', 'new', 'via', 'linkedin', 'intro',
+  'weekly', 'daily', 'review', 'check', 'standup', 'kickoff', 'onboarding', 'discovery', 'session',
 ]);
+
+/** Tokens worth matching on: drops initials, filler and the operator's own words. */
+function tokens(s: string, own: Set<string> = new Set()): string[] {
+  return norm(s)
+    .split(' ')
+    .filter((t) => t.length >= 3 && !STOP.has(t) && !own.has(t));
+}
+
+function ownSet(ctx: Pick<DigestContext, 'ownNames'>): Set<string> {
+  return new Set((ctx.ownNames ?? []).flatMap((n) => norm(n).split(' ')).filter(Boolean));
+}
 
 const BULK_LOCALPARTS = /^(no-?reply|do-?not-?reply|notifications?|alerts?|mailer|bounce|postmaster|support|info|hello|hi|team|news|newsletter|updates?|billing|receipts?|digest|marketing|noreply)$/i;
 
@@ -111,25 +118,19 @@ const BULK_BODY = /\b(unsubscribe|manage (your )?(email )?preferences|opt ?out|v
 /** Relayed list mail: "Someone via LinkedIn", "X via Substack". */
 const BULK_RELAY = /\bvia (linkedin|substack|medium|quora|facebook|nextdoor|meetup|eventbrite)\b/i;
 
-/**
- * Sender names that are an ORGANISATION, not a person. Each pattern here was
- * added because a sender of that shape had been sitting in the people tier.
- */
+/** Sender names that are an ORGANISATION, not a person. */
 const BULK_ORG = /\b(ticketmaster|nextdoor|eventbrite|stubhub|club|theat(er|re)|arena|casino|store|shop|dealership|bank|airlines?|hotel|tickets?)\b|^trending on\b|^the .* (team|crew)$|^mail delivery|daemon|postmaster/i;
 
 /** Machine mail: repo notifications, CI, deploys, monitors. */
 const BULK_MACHINE = /\[[\w.-]+\/[\w.-]+\]|\b(run (failed|succeeded)|workflow run|build (failed|passed)|pipeline|pull request|commit|merged in|alert:|incident|uptime|delivery status notification|undeliverable|recap of your meeting)\b/i;
 
 /**
- * Is this an automated / company sender rather than a person?
- * Conservative on purpose: a false positive here hides a client.
+ * Is this an automated / company sender rather than a person? Conservative on
+ * purpose: a false positive here hides a client.
  *
- * Both text fields are searched, never one each. The connectors disagree about
- * which is which: lib/connectors/email.ts puts "<inbox> — <sender>" in `title`
- * and the SUBJECT in `preview`, while Slack puts the channel in `title` and
- * the message in `preview`. Probing live data caught this — a full day of mail
- * produced zero unsubscribe candidates, because every subject-shaped rule was
- * reading an inbox label.
+ * Both text fields are searched. lib/connectors/email.ts puts
+ * "<inbox> — <sender>" in `title` and the SUBJECT in `preview`, while Slack
+ * puts the channel in `title` and the message in `preview`.
  */
 export function isBulkSender(sender: string, title: string, preview: string): boolean {
   const local = sender.includes('@') ? sender.split('@')[0] : '';
@@ -139,27 +140,24 @@ export function isBulkSender(sender: string, title: string, preview: string): bo
   return BULK_MACHINE.test(text) || BULK_BODY.test(text) || BULK_SUBJECT.test(text);
 }
 
-/** WhatsApp/Slack group threads: a member count or an obvious group label. */
+/** WhatsApp/Slack group threads: a member count, a group jid or an obvious group label. */
 export function isGroupChat(item: CommsItem): boolean {
+  if (item.jid?.endsWith('@g.us')) return true;
   const s = item.sender ?? '';
   if (/\(\s*\d+\s*\)\s*$/.test(s)) return true; // "Cohort 1 (12)"
   return /\b(group|chat|crew|team|family|squad|community)\b/i.test(s) && item.source !== 'email';
 }
 
-const COHORT_RE = /\b(cohort|founderos|founder os|deploy day|railway|gbrain|g-brain|module|lesson|homework|onboarding|sop|workspace)\b/i;
 const BRAND_RE = /\b(sponsor|sponsorship|partnership|collab|collaboration|brand deal|ambassador|paid promo|ugc|affiliate)\b/i;
 const REPLY_RE = /\b(re:|following up|circling back|as discussed|per our call|proposal|quote|invoice attached|contract|next steps?|kick ?off)\b/i;
 
 /**
- * Does `needle` identify the same person as one of `haystack`?
- *
- * Deliberately strict, because this decides the top of the report. One shared
- * short token is not identity: a common company word can match half a
- * calendar. A match needs either TWO tokens in the same entry (first + last
- * name) or one distinctive token of six characters or more (a surname).
+ * Does `needle` identify the same person as one of `haystack`? Strict, because
+ * this decides the top of the report: a match needs TWO tokens in the same
+ * entry (first + last name) or one distinctive token of six characters or more.
  */
-function nameHits(needle: string, haystack: string[]): boolean {
-  const nt = tokens(needle);
+export function nameHits(needle: string, haystack: string[], own: Set<string> = new Set()): boolean {
+  const nt = tokens(needle, own);
   if (nt.length === 0) return false;
   return haystack.some((entry) => {
     const h = norm(entry);
@@ -168,54 +166,71 @@ function nameHits(needle: string, haystack: string[]): boolean {
   });
 }
 
+/** An address or brand from bdpilot's open deals, matched against sender + reply address. */
+function dealHit(item: CommsItem, deals: string[], own: Set<string>): boolean {
+  if (deals.length === 0) return false;
+  const addr = (item.replyTo ?? (item.sender?.includes('@') ? item.sender : '') ?? '').toLowerCase();
+  for (const d of deals) {
+    const v = d.trim().toLowerCase();
+    if (!v) continue;
+    if (v.includes('@')) {
+      if (addr && addr === v) return true;
+      continue;
+    }
+    // a brand name: the sender, or the domain of the reply address
+    if (nameHits(item.sender ?? '', [d], own)) return true;
+    const domain = addr.split('@')[1]?.split('.')[0] ?? '';
+    if (domain.length >= 4 && norm(v).replace(/ /g, '') === domain) return true;
+  }
+  return false;
+}
+
 export function classify(item: CommsItem, ctx: DigestContext): { tier: DigestTier; reason: string } {
   const sender = item.sender ?? '';
   const title = item.title ?? '';
   const preview = item.preview ?? '';
   const group = isGroupChat(item);
   const bulk = isBulkSender(sender, title, preview);
-
-  // 1. Anyone he has a call with. Calendar titles carry the names (CalDAV
-  //    gives no attendee list), so match the sender against the title text.
-  if (!bulk && sender && nameHits(sender, ctx.meetingTitles)) {
-    return { tier: 'call', reason: 'on your calendar — you have a call with them' };
-  }
-
-  // 2. A client or prospect. A reply landing on a proposal or deal thread is
-  //    the case that matters most here, so REPLY_RE promotes too.
-  if (!bulk && sender && nameHits(sender, ctx.clientNames)) {
-    return { tier: 'client', reason: 'current client or prospect' };
-  }
-  if (!bulk && !group && REPLY_RE.test(`${title}\n${preview}`) && nameHits(sender, ctx.clientNames.concat(ctx.meetingTitles))) {
-    return { tier: 'client', reason: 'replying on a proposal or deal thread' };
-  }
-
   const text = `${title}\n${preview}`;
+  const own = ownSet(ctx);
 
-  // 3. Cohort questions beat group-chat noise even inside a group.
-  if (COHORT_RE.test(text)) {
-    return { tier: 'people', reason: 'cohort question' };
+  // 1. Anyone with a call booked. CalDAV gives no attendee list, so the
+  //    sender is matched against the event title text.
+  if (!bulk && sender && nameHits(sender, ctx.meetingTitles, own)) {
+    return { tier: 'call', reason: 'on your calendar' };
   }
 
-  // 4. Students and family.
-  if (sender && nameHits(sender, ctx.students)) return { tier: 'people', reason: 'your student' };
-  if (sender && nameHits(sender, ctx.family)) return { tier: 'people', reason: 'family' };
+  // 2. A client or prospect on the Attio roster.
+  if (!bulk && sender && nameHits(sender, ctx.clientNames, own)) {
+    return { tier: 'client', reason: 'client or prospect' };
+  }
+  if (!bulk && !group && REPLY_RE.test(text) && nameHits(sender, ctx.clientNames.concat(ctx.meetingTitles), own)) {
+    return { tier: 'client', reason: 'reply on a deal thread' };
+  }
 
-  // 5. Group chatter, once the cohort check above has had its chance.
+  // 3. A brand that bdpilot is already negotiating with.
+  if (!group && dealHit(item, ctx.brandDeals, own)) {
+    return { tier: 'branddeal', reason: 'open brand deal' };
+  }
+
+  // 4. Tagged contacts, even inside a group.
+  if (sender && nameHits(sender, ctx.tagged, own)) return { tier: 'people', reason: 'tagged contact' };
+
+  // 5. Group chatter.
   if (group) return { tier: 'group', reason: 'group chat' };
 
-  // 6. Brand deals: mid priority by his own ranking. Bulk-checked first, so a
-  //    LinkedIn digest about someone else's "partnership" is not a brand deal.
+  // 6. Brand-deal wording from someone not yet in bdpilot. Bulk-checked first,
+  //    so a newsletter about someone else's "partnership" is not a brand deal.
   if (!bulk && BRAND_RE.test(text)) {
     return { tier: 'branddeal', reason: 'brand deal or partnership' };
   }
 
   // 7. Companies and software last; everyone else is a person worth reading.
-  if (bulk) return { tier: 'noise', reason: 'automated or marketing sender' };
+  if (bulk) return { tier: 'noise', reason: 'automated sender' };
   return { tier: 'people', reason: 'a person wrote to you' };
 }
 
-/** Bulk senders in the window, noisiest first — the unsubscribe worklist. */
+/** Bulk senders in the window, noisiest first: the unsubscribe worklist. */
 export function unsubscribeCandidates(items: CommsItem[], ctx: DigestContext): UnsubscribeCandidate[] {
   const counts = new Map<string, number>();
   for (const i of items) {
@@ -253,6 +268,7 @@ export function buildDigest(items: CommsItem[], ctx: DigestContext, windowHours 
       ts: i.ts,
       ...(i.replyTo ? { replyTo: i.replyTo } : {}),
       ...(i.account ? { account: i.account } : {}),
+      ...(i.jid ? { jid: i.jid } : {}),
     };
   });
 
@@ -266,13 +282,10 @@ export function buildDigest(items: CommsItem[], ctx: DigestContext, windowHours 
   };
 }
 
-/** tier first, then NEW above held-over, then newest inside each group. */
+/** Tier first, then NEW above held-over, then newest inside each group. */
 function orderEntries(entries: DigestEntry[]): DigestEntry[] {
   return [...entries].sort(
-    (a, b) =>
-      a.rank - b.rank ||
-      Number(!!a.carried) - Number(!!b.carried) ||
-      Date.parse(b.ts) - Date.parse(a.ts),
+    (a, b) => a.rank - b.rank || Number(!!a.carried) - Number(!!b.carried) || Date.parse(b.ts) - Date.parse(a.ts),
   );
 }
 
@@ -288,22 +301,12 @@ function tally(entries: DigestEntry[]): Pick<CommsDigest, 'counts' | 'total' | '
 }
 
 /**
- * Stack this morning's report ON TOP of what is left of the older ones.
- *
- * An entry now leaves the report for exactly one reason: the operator cleared it.
- * Falling out of the 24-hour window is no longer one, which was the whole
- * complaint — the report was forgetting the very people it existed to chase.
- *
- * Pure on purpose: the caller supplies the previous entries and the cleared
- * keys, so this is fully testable and the runner stays the only thing that
- * touches the database.
+ * Stack this morning's report ON TOP of what is left of the older ones. An
+ * entry leaves the report for exactly one reason: the operator cleared it.
+ * Falling out of the 24-hour window is not one. Pure: the caller supplies the
+ * previous entries and the cleared keys.
  */
-export function stackDigest(
-  fresh: CommsDigest,
-  previous: DigestEntry[],
-  clearedKeys: Iterable<string>,
-  now = Date.now(),
-): CommsDigest {
+export function stackDigest(fresh: CommsDigest, previous: DigestEntry[], clearedKeys: Iterable<string>, now = Date.now()): CommsDigest {
   const cleared = new Set(clearedKeys);
   const seen = new Set(fresh.entries.map(entryKey));
   const oldest = now - CARRY_MAX_DAYS * 86_400_000;
@@ -324,46 +327,15 @@ export function stackDigest(
 }
 
 /**
- * A stable id for one message in the report.
- *
- * Must survive a rebuild: the 09:00 job regenerates the digest from scratch
- * and "run now" does it on demand, so anything positional or random would
- * resurrect every message the operator had already cleared. Channel + sender +
- * timestamp is what actually identifies a message, and deliberately NOT the
- * tier — re-tuning the ranking must not un-clear his inbox.
+ * A stable id for one message in the report. Must survive a rebuild, so
+ * channel + sender + timestamp, and deliberately NOT the tier: re-tuning the
+ * ranking must not un-clear the inbox.
  */
 export function entryKey(e: Pick<DigestEntry, 'source' | 'sender' | 'ts'>): string {
   return `${e.source}|${e.sender}|${e.ts}`;
 }
 
-export type ReplyTarget = {
-  kind: 'email' | 'whatsapp' | 'slack' | 'none';
-  /** Where clicking should go, or null when nothing honest can be offered. */
-  href: string | null;
-  label: string;
-};
-
-/**
- * Where a reply to this message actually goes.
- *
- * WhatsApp cannot be SENT to from the OS (the connector reads a local SQLite
- * copy, there is no send API), so the honest move is a deep link that opens
- * the real conversation — wa.me/<number>, built from the chat's JID. Group
- * threads have no dialable number, so they get no link rather than a broken
- * one. Email and Slack can genuinely be sent from here via /api/comms/reply.
- */
-export function replyTarget(e: Pick<DigestEntry, 'source' | 'sender' | 'replyTo'>): ReplyTarget {
-  if (e.source === 'email') {
-    const to = e.replyTo ?? (e.sender.includes('@') ? e.sender : null);
-    return { kind: 'email', href: to ? `mailto:${to}` : null, label: 'Reply' };
-  }
-  if (e.source === 'whatsapp') {
-    const digits = (e.replyTo ?? '').replace(/\D/g, '');
-    return { kind: 'whatsapp', href: digits ? `https://wa.me/${digits}` : null, label: 'WhatsApp' };
-  }
-  if (e.source === 'slack') {
-    const ch = (e.replyTo ?? '').replace(/^#/, '');
-    return { kind: 'slack', href: ch ? `slack://channel?team=&id=${ch}` : null, label: 'Slack' };
-  }
-  return { kind: 'none', href: null, label: '' };
+/** Default panel state: open before noon, collapsed after (local time). */
+export function digestOpenByDefault(now: Date = new Date()): boolean {
+  return now.getHours() < 12;
 }

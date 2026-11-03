@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BlueprintGraph } from '@/lib/blueprint/graph';
 import { APP_ID, buildHierarchy, describeScope, expandedAtLevel, indexHierarchy, relationsOf, ROUTER_DEPARTMENTS, searchHierarchy } from '@/lib/blueprint/hierarchy';
+import { BRAND } from '@/lib/brand';
 import { focusEdges, layoutHierarchy, Router, spineEdges, type Box } from '@/lib/blueprint/hierarchy-layout';
 
 function graph(): BlueprintGraph {
@@ -9,10 +10,10 @@ function graph(): BlueprintGraph {
     { id: 'agent-conductor', kind: 'wizard', name: 'Wizard', layer: 1, status: 'live', blurb: 'The super agent.', facts: {}, icon: 'wand-2' },
     { id: 'dept-sales', kind: 'department', name: 'Sales', layer: 2, status: 'live', blurb: 'pipeline', facts: {}, icon: 'folder' },
     { id: 'dept-tech', kind: 'department', name: 'TECH', layer: 2, status: 'live', blurb: 'the OS', facts: {}, icon: 'folder' },
-    { id: 'agent-atlas', kind: 'agent', name: 'Atlas', layer: 2, status: 'live', blurb: '', facts: { role: 'Closer', tools: 'attio' }, icon: 'bot' },
+    { id: 'agent-drake', kind: 'agent', name: 'Drake', layer: 2, status: 'live', blurb: '', facts: { role: 'Closer', tools: 'attio' }, icon: 'bot' },
     { id: 'agent-crm', kind: 'agent', name: 'Attio CRM', layer: 2, status: 'designed', blurb: '', facts: { role: 'CRM' }, icon: 'bot' },
-    { id: 'agent-nova', kind: 'agent', name: 'Nova', layer: 2, status: 'live', blurb: '', facts: { role: 'Auditor' }, icon: 'bot' },
-    { id: 'person-rook', kind: 'person', name: 'Rook', layer: 2, status: 'live', blurb: 'Setter', facts: {}, icon: 'user-round' },
+    { id: 'agent-yeat', kind: 'agent', name: 'Yeat', layer: 2, status: 'live', blurb: '', facts: { role: 'Auditor' }, icon: 'bot' },
+    { id: 'person-koda', kind: 'person', name: 'Koda', layer: 2, status: 'live', blurb: 'Setter', facts: {}, icon: 'user-round' },
     { id: 'connector-gbrain', kind: 'connector', name: 'G-Brain', layer: 3, status: 'live', blurb: '', facts: { kind: 'brain' }, icon: 'plug' },
     { id: 'connector-attio', kind: 'connector', name: 'Attio', layer: 3, status: 'not-configured', blurb: '', facts: { kind: 'crm' }, icon: 'plug' },
     { id: 'model-claude-engine', kind: 'model', name: 'Claude engine', layer: 3, status: 'live', blurb: 'Local claude binary', facts: { mode: 'headless' }, icon: 'cpu' },
@@ -21,9 +22,9 @@ function graph(): BlueprintGraph {
     { id: 'router-deals', kind: 'router', name: 'Deal routing', layer: 3, status: 'live', blurb: 'Deal routing — inbound → gsend', facts: {}, icon: 'route' },
     { id: 'surface-content', kind: 'surface', name: 'Content', layer: 3, status: 'live', blurb: '', facts: { route: '/content' }, icon: 'clapperboard' },
     { id: 'surface-wizard', kind: 'surface', name: 'Wizard', layer: 3, status: 'live', blurb: '', facts: { route: '/wizard' }, icon: 'wand-2' },
-    { id: 'host-macbook', kind: 'host', name: 'laptop', layer: 4, status: 'live', blurb: 'Where the OS is built.', facts: {}, icon: 'laptop' },
-    { id: 'host-mini', kind: 'host', name: 'dedicated host', layer: 4, status: 'live', blurb: 'Always-on host.', facts: { address: '10.0.0.2' }, icon: 'server' },
-    { id: 'store-db', kind: 'store', name: 'OS database', layer: 4, status: 'live', blurb: 'SQLite', facts: { path: 'data/slab.db' }, icon: 'database' },
+    { id: 'host-macbook', kind: 'host', name: 'MacBook', layer: 4, status: 'live', blurb: 'Where the OS is built.', facts: {}, icon: 'laptop' },
+    { id: 'host-mini', kind: 'host', name: 'Mac mini', layer: 4, status: 'live', blurb: 'Always-on host.', facts: { address: '10.0.0.2' }, icon: 'server' },
+    { id: 'store-db', kind: 'store', name: 'OS database', layer: 4, status: 'live', blurb: 'SQLite', facts: { path: 'data/glados.db' }, icon: 'database' },
     { id: 'store-wizard', kind: 'store', name: 'Wizard threads', layer: 4, status: 'live', blurb: 'projects', facts: { path: 'data/wizard/' }, icon: 'messages-square' },
     { id: 'daemon-gsend', kind: 'daemon', name: 'Gsend', layer: 4, status: 'configured', blurb: 'sends the queue', facts: { host: 'mini' }, icon: 'send' },
     { id: 'daemon-briefing', kind: 'daemon', name: 'Daily briefing', layer: 4, status: 'configured', blurb: 'weekday run', facts: { host: 'mini', schedule: 'weekdays 06:30' }, icon: 'sunrise' },
@@ -31,15 +32,15 @@ function graph(): BlueprintGraph {
   for (let i = 0; i < 6; i++) nodes.push({ id: `model-${i}`, kind: 'model', name: `Model ${i}`, layer: 3, status: 'live', blurb: '', facts: { family: 'image' }, icon: 'cpu' });
   const edges: BlueprintGraph['edges'] = [
     { from: 'operator', to: 'agent-conductor', kind: 'commands' },
-    { from: 'agent-conductor', to: 'agent-atlas', kind: 'commands' },
+    { from: 'agent-conductor', to: 'agent-drake', kind: 'commands' },
     { from: 'agent-conductor', to: 'agent-crm', kind: 'commands' },
-    { from: 'agent-conductor', to: 'agent-nova', kind: 'commands' },
-    { from: 'agent-atlas', to: 'dept-sales', kind: 'member-of' },
+    { from: 'agent-conductor', to: 'agent-yeat', kind: 'commands' },
+    { from: 'agent-drake', to: 'dept-sales', kind: 'member-of' },
     { from: 'agent-crm', to: 'dept-sales', kind: 'member-of' },
-    { from: 'person-rook', to: 'dept-sales', kind: 'member-of' },
-    { from: 'agent-nova', to: 'dept-tech', kind: 'member-of' },
-    { from: 'agent-atlas', to: 'connector-attio', kind: 'uses' },
-    { from: 'agent-nova', to: 'connector-gbrain', kind: 'uses' },
+    { from: 'person-koda', to: 'dept-sales', kind: 'member-of' },
+    { from: 'agent-yeat', to: 'dept-tech', kind: 'member-of' },
+    { from: 'agent-drake', to: 'connector-attio', kind: 'uses' },
+    { from: 'agent-yeat', to: 'connector-gbrain', kind: 'uses' },
     { from: 'agent-conductor', to: 'model-claude-engine', kind: 'runs-on' },
     { from: 'agent-conductor', to: 'store-wizard', kind: 'writes' },
     { from: 'surface-wizard', to: 'store-wizard', kind: 'uses' },
@@ -73,7 +74,7 @@ describe('blueprint hierarchy — the graph as buckets', () => {
     expect(idx.items.get(APP_ID)?.type).toBe('container');
     expect(idx.items.get(ROUTER_DEPARTMENTS)?.kind).toBe('router');
     // agents sit inside their department, daemons on their host, the engine beside the Wizard
-    expect(idx.parent.get('agent-atlas')).toBe('dept-sales');
+    expect(idx.parent.get('agent-drake')).toBe('dept-sales');
     expect(idx.chain('daemon-gsend')[0]).toBe('k-host-mini');
     expect(idx.chain('store-db')[0]).toBe('k-host-macbook');
     expect(idx.parent.get('model-claude-engine')).toBe(APP_ID);
@@ -164,27 +165,27 @@ describe('blueprint hierarchy — the graph as buckets', () => {
 
   it('focus mode keeps the selection, its chain and its relations sharp and draws one edge per related card', () => {
     const layout = layoutHierarchy(h, expandedAtLevel(idx, 3));
-    const rels = relationsOf(h, idx, 'agent-atlas');
-    const f = focusEdges(idx, layout, 'agent-atlas', rels);
-    expect(f.hot.has('agent-atlas')).toBe(true);
+    const rels = relationsOf(h, idx, 'agent-drake');
+    const f = focusEdges(idx, layout, 'agent-drake', rels);
+    expect(f.hot.has('agent-drake')).toBe(true);
     expect(f.hot.has('dept-sales')).toBe(true);
     expect(f.hot.has('connector-attio')).toBe(true);
-    expect(f.hot.has('agent-nova')).toBe(false);
+    expect(f.hot.has('agent-yeat')).toBe(false);
     expect(f.edges.length).toBe(2); // commanded by the Wizard, uses Attio
   });
 
   it('search finds by name and by subline and reports the path', () => {
     const hits = searchHierarchy(idx, 'attio');
     expect(hits.map((x) => x.id)).toEqual(expect.arrayContaining(['agent-crm', 'connector-attio']));
-    expect(hits.find((x) => x.id === 'connector-attio')?.path).toBe('Founder OS › Connectors');
-    expect(searchHierarchy(idx, 'closer')[0]?.id).toBe('agent-atlas');
+    expect(hits.find((x) => x.id === 'connector-attio')?.path).toBe(`${BRAND.name} › Connectors`);
+    expect(searchHierarchy(idx, 'closer')[0]?.id).toBe('agent-drake');
     expect(searchHierarchy(idx, 'zzz')).toHaveLength(0);
   });
 
   it('the ask scope describes the selection, its members and its relations, never invents', () => {
     const scope = describeScope(h, idx, 'dept-sales') as { scope: string; path: string; inside?: unknown[]; relations?: string[] };
     expect(scope.scope).toBe('Sales');
-    expect(scope.path).toBe('Founder OS › Sales');
+    expect(scope.path).toBe(`${BRAND.name} › Sales`);
     expect(scope.inside).toHaveLength(3);
     expect(scope.relations?.some((r) => r.includes('Attio'))).toBe(true);
     const whole = describeScope(h, idx, null) as { scope: string; containers: unknown[] };

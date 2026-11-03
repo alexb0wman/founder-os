@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { resolveCred, CRED_FILES } from '@/lib/creds';
 
 /**
- * Foreplay public API client (public.api.foreplay.co, spec 0.26.x): the read
+ * Foreplay public API client (public.api.foreplay.co, spec 0.26.x) — the read
  * side of Adscout. The API is read-only: tracking brands / saving ads happens
  * in the Foreplay app; this client reads, and everything downstream reasons
  * over locally stored snapshots so credits are spent once per fact.
@@ -17,7 +17,7 @@ export const FOREPLAY_KEY = 'FOREPLAY_API_KEY';
 const BASE_URL = 'https://public.api.foreplay.co';
 
 export function resolveForeplayKey(): string | undefined {
-  return resolveCred(FOREPLAY_KEY, [CRED_FILES.socialMedia, CRED_FILES.brainAgent]);
+  return resolveCred(FOREPLAY_KEY, [CRED_FILES.agentsEnv, CRED_FILES.socialMedia]);
 }
 
 /* ---------------------------------- shapes --------------------------------- */
@@ -135,7 +135,7 @@ export class ForeplayError extends Error {
 }
 
 export class ForeplayClient {
-  /** Number of API requests made by this instance: the credit ledger. */
+  /** Number of API requests made by this instance — the credit ledger. */
   callCount = 0;
 
   constructor(
@@ -168,7 +168,7 @@ export class ForeplayClient {
     return ForeplayUsageSchema.parse(await this.request('/api/usage'));
   }
 
-  /** Spyder watchlist: the brands the operator tracks in the Foreplay app (limit ≤ 10 per page). */
+  /** Spyder watchlist — the brands the operator tracks in the Foreplay app (limit ≤ 10 per page). */
   async spyderBrands(): Promise<SpyderBrand[]> {
     const out: SpyderBrand[] = [];
     for (let offset = 0; offset < 100; offset += 10) {
@@ -184,13 +184,13 @@ export class ForeplayClient {
     return z.array(ForeplayAdSchema).parse(data);
   }
 
-  /** Daily active/inactive + format-split series: the creative-velocity signal. */
+  /** Daily active/inactive + format-split series — the creative-velocity signal. */
   async brandAnalytics(id: string, startDate?: string, endDate?: string): Promise<AnalyticsDay[]> {
     const data = await this.request('/api/brand/analytics', { id, start_date: startDate, end_date: endDate });
     return z.array(AnalyticsDaySchema).parse(data);
   }
 
-  /** All Foreplay brand profiles (pages) publishing for a domain: the sponsor-dossier entry point. */
+  /** All Foreplay brand profiles (pages) publishing for a domain — the sponsor-dossier entry point. */
   async brandsByDomain(domain: string, limit = 10): Promise<SpyderBrand[]> {
     const data = await this.request('/api/brand/getBrandsByDomain', { domain, limit });
     return z.array(SpyderBrandSchema).parse(data);
@@ -201,7 +201,7 @@ export class ForeplayClient {
     return z.array(ForeplayAdSchema).parse(data);
   }
 
-  /** Search the ~100M-ad Discovery database. Explicit spend: user-triggered only. */
+  /** Search the ~100M-ad Discovery database. Explicit spend — user-triggered only. */
   async discoveryAds(query: string, filters: AdFilters = {}): Promise<ForeplayAd[]> {
     const data = await this.request('/api/discovery/ads', { query, ...filters });
     return z.array(ForeplayAdSchema).parse(data);
@@ -211,14 +211,14 @@ export class ForeplayClient {
     return ForeplayAdSchema.parse(await this.request('/api/ad', { ad_id: adId }));
   }
 
-  /** Ads reusing the same creative: group growth is the scaling signal. */
+  /** Ads reusing the same creative — group growth is the scaling signal. */
   async adDuplicates(adId: string): Promise<ForeplayAd[]> {
     const data = await this.request(`/api/ad/duplicates/${encodeURIComponent(adId)}`);
     return z.array(ForeplayAdSchema).parse(data);
   }
 }
 
-/** Client from the resolved key, or null when unconfigured: callers stay honest. */
+/** Client from the resolved key, or null when unconfigured — callers stay honest. */
 export function createForeplayClient(fetchImpl?: FetchLike): ForeplayClient | null {
   const key = resolveForeplayKey();
   if (!key) return null;

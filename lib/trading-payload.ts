@@ -1,33 +1,56 @@
+/**
+ * One builder for the /trading payload (pages/trading.md §2), used by the page
+ * and GET /api/trading so a refresh never shows a different picture from
+ * first paint. Reads SQLite plus, only when PHANTOM_WALLET_ADDRESS is set, one
+ * cached public RPC read (free). Never calls Robinhood. Sample and Filming
+ * answer the fixture with zero outbound requests.
+ */
 import { getDb } from '@/lib/data';
 import { robinhoodStatus } from '@/lib/connectors/robinhood';
-import { phantomBalance } from '@/lib/connectors/phantom';
-import { AGENTIC_ID, type TradingPayload } from '@/lib/trading-view';
+import { phantomAddress, phantomStatus, readPhantom } from '@/lib/connectors/phantom';
+import type { ConnectorStatus } from '@/lib/connectors/types';
+import { sampleTrading, type FoMode } from '@/lib/fo-sample';
+import { AGENTIC_ID, buildView, type PhantomView, type TradingPayload } from '@/lib/trading-view';
 
 export { AGENTIC_ID, type TradingPayload };
 
-/**
- * One builder for the /trading payload, used by both the server page and
- * GET /api/trading, so the board's refresh can never show a different picture
- * from first paint. The shape lives in lib/trading-view.ts (pure) because the
- * client board imports it and must never reach sqlite or the filesystem.
- */
-export async function tradingPayload(): Promise<TradingPayload> {
-  const db = getDb();
-  const accounts = db.trading.latestSnapshots();
-  const history = Object.fromEntries(accounts.map((a) => [a.accountId, db.trading.history(a.accountId)]));
-  // Read-only, and a price outage must not blank the balance.
-  const phantom = await phantomBalance();
+export async function tradingPayload(mode: FoMode, now: Date = new Date()): Promise<TradingPayload> {
+  if (mode !== 'live') {
+    const s = sampleTrading(now);
+    const sampleStatus = (id: string, name: string): ConnectorStatus => ({ id, name, kind: 'payments', state: 'connected', detail: 'Sample data' });
+    return {
+      ...s,
+      status: sampleStatus('robinhood', 'Robinhood'),
+      phantomStatus: sampleStatus('phantom', 'Phantom'),
+      view: buildView({ accounts: s.accounts, positions: s.positions, activity: s.activity, phantom: s.phantom, now: now.getTime() }),
+      mode,
+      sample: true,
+      at: now.toISOString(),
+    };
+  }
+  const t = getDb().trading;
+  const accounts = t.latestSnapshots();
+  const history = Object.fromEntries(accounts.map((a) => [a.accountId, t.history(a.accountId)]));
+  const positions = t.positions();
+  const activity = t.activity(50);
+  const address = phantomAddress();
+  // Read in parallel with nothing else to wait on; a dead RPC never blanks the board.
+  const reading = await readPhantom(address);
+  const phantom: PhantomView | null = reading.balance;
   return {
     accounts,
     history,
-    snapshot: accounts[0] ?? null,
-    positions: db.trading.positions(),
-    activity: db.trading.activity(50),
-    analysis: db.trading.latestAnalysis(AGENTIC_ID),
-    openOrders: db.trading.openOrders(),
-    status: robinhoodStatus(accounts),
-    source: accounts[0]?.source ?? null,
+    positions,
+    activity,
+    analysis: t.latestAnalysis(AGENTIC_ID),
+    openOrders: t.openOrders(),
+    limits: t.limits(),
+    status: robinhoodStatus(accounts, now),
+    phantomStatus: phantomStatus(reading, address),
     phantom,
-    at: new Date().toISOString(),
+    view: buildView({ accounts, positions, activity, phantom, now: now.getTime() }),
+    mode,
+    sample: false,
+    at: now.toISOString(),
   };
 }

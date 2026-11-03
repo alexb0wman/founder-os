@@ -2,11 +2,10 @@
 
 import { useState } from 'react';
 import type { Agent, Broadcast } from '@/lib/schemas';
-import { AsyncButton } from '@/components/AsyncButton';
 import { ConductorEmblem } from '@/components/ConductorEmblem';
 
 /**
- * The "AI Head" card from the FounderOS board: the Conductor super-agent
+ * The "AI Head" card from the GladOS board: the Wizard super-agent
  * with its chat pill. Sending broadcasts the message to every agent in
  * parallel via POST /api/agents/broadcast; replies expand below.
  */
@@ -49,58 +48,54 @@ export function ConductorCard({
   }
 
   return (
-    <div data-lens="r" className="pressable is-row group w-[340px] rounded-tile border border-os-border-bright bg-os-surface p-4">
-      <div className="text-center text-[10px] uppercase tracking-[0.25em] text-os-dim">AI Head</div>
+    <div className="hoverable group w-[340px] rounded-2xl border border-os-border-bright bg-os-surface p-6">
+      <div className="text-center text-[12.5px] text-os-muted">AI head</div>
 
-      {/* Living core — breathes and orbits while the Conductor is broadcasting */}
-      <div className="mt-2 flex justify-center">
+      {/* Living core — breathes and orbits while the Wizard is broadcasting */}
+      <div className="mt-3 flex justify-center">
         <ConductorEmblem size={62} thinking={sending} />
       </div>
-      <div className="mt-2 text-center text-sm font-bold tracking-[0.2em]">CONDUCTOR</div>
-      <div className="text-center text-[10px] text-os-dim">
+      <div className="mt-3 text-center text-[14.5px] font-medium">Wizard</div>
+      <div className="text-center text-[11.5px] text-os-dim">
         super agent · {conductor.instance} runtime until the dedicated host lands
       </div>
 
       {/* Chat pill → broadcast to every agent */}
-      <div className="mt-3 flex gap-1.5">
+      <div className="mt-4 flex gap-2.5">
         <input
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && send()}
-          placeholder="Chat with Conductor — reaches every agent"
-          className="min-w-0 flex-1 rounded-full border border-os-border bg-os-bg px-3 py-1.5 text-xs text-os-text placeholder:text-os-dim focus:border-os-border-bright focus:outline-none"
+          placeholder="Chat with Wizard — reaches every agent"
+          className="min-w-0 flex-1 rounded-sm-t border border-os-border bg-os-bg px-3 py-2.5 text-[13px] text-os-text placeholder:text-os-dim focus:border-os-border-strong focus:outline-none"
           disabled={sending}
         />
-        {/* three-state broadcast control: Send → spinner → ✓ (✗ if it threw) */}
-        <AsyncButton
-          run={send}
-          disabled={!message.trim()}
-          failed={error !== null}
-          doneLabel=""
-          failLabel=""
-          className="!rounded-full shrink-0"
+        <button
+          onClick={send}
+          disabled={sending || !message.trim()}
+          className="c-btn c-btn-primary h-auto shrink-0 px-3.5 py-2.5 text-[13px]"
         >
-          Send
-        </AsyncButton>
+          {sending ? '…' : 'Send'}
+        </button>
       </div>
-      {error && <p className="mt-1.5 text-[11px] text-os-muted">⚠ {error}</p>}
+      {error && <p className="mt-1.5 text-[12.5px] text-os-muted">✗ {error}</p>}
 
       {/* Capability pills */}
-      <div className="mt-3 grid grid-cols-3 gap-1">
+      <div className="mt-4 grid grid-cols-3 gap-1">
         {['Broadcast', 'Orchestration', 'Instances'].map((cap) => (
-          <span key={cap} className="rounded-full bg-os-text px-2 py-1 text-center text-[9px] font-semibold uppercase tracking-wider text-os-bg">
+          <span key={cap} className="truncate rounded-[6px] border border-os-border-strong bg-os-surface2 px-1.5 py-1 text-center text-[11px] text-os-muted">
             {cap}
           </span>
         ))}
       </div>
 
       {/* Agent tools bar */}
-      <div className="mt-2 rounded-md bg-os-raised px-2 py-1 text-center text-[9px] uppercase tracking-[0.2em] text-os-muted">
-        Agent Tools
+      <div className="mt-3 rounded-md bg-os-raised px-2 py-1 text-center text-[11.5px] text-os-muted">
+        Agent tools
       </div>
       <div className="mt-1.5 flex justify-center gap-1">
         {conductor.tools.map((tool) => (
-          <span key={tool} className="rounded border border-os-border px-1.5 py-0.5 font-mono text-[9px] text-os-muted">
+          <span key={tool} className="rounded border border-os-border px-1.5 py-0.5 font-mono text-[10px] text-os-muted">
             {tool}
           </span>
         ))}
@@ -108,27 +103,26 @@ export function ConductorCard({
 
       {/* Latest broadcast + replies */}
       {broadcast && (
-        <div className="mt-3 border-t border-os-border pt-2">
+        <div className="mt-4 border-t border-os-border pt-2">
           <button
             onClick={() => setShowReplies((v) => !v)}
-            className="pressable flex w-full items-baseline justify-between gap-2 text-left"
+            className="flex w-full items-baseline justify-between gap-3 text-left"
           >
-            <span className="truncate text-[11px] text-os-muted">«{broadcast.message}»</span>
-            <span className="shrink-0 text-[10px] text-os-ok">
-              {broadcast.replies.filter((r) => r.ok).length}/{broadcast.replies.length} ok{' '}
-              <span className="text-os-dim">{showReplies ? '▾' : '▸'}</span>
+            <span className="truncate text-[12.5px] text-os-muted">«{broadcast.message}»</span>
+            <span className="shrink-0 text-[11.5px] text-os-dim">
+              {broadcast.replies.filter((r) => r.ok).length}/{broadcast.replies.length} ok {showReplies ? '▾' : '▸'}
             </span>
           </button>
           {showReplies && (
-            <ul className="animate-enter mt-2 max-h-56 space-y-1 overflow-y-auto pr-1">
+            <ul className="mt-3 max-h-56 space-y-1 overflow-y-auto pr-1">
               {broadcast.replies.map((reply) => (
-                <li key={reply.id} className="flex items-start gap-1.5 rounded-md bg-os-raised px-2 py-1.5">
+                <li key={reply.id} className="flex items-start gap-2.5 rounded-md bg-os-raised px-2 py-2.5">
                   <span
                     className={`mt-1 h-1 w-1 shrink-0 rounded-full ${reply.ok ? 'bg-os-text' : 'border border-os-dim bg-transparent'}`}
                   />
                   <div className="min-w-0">
-                    <span className="text-[10px] font-semibold">{agentNames[reply.agentId] ?? reply.agentId}</span>
-                    <span className="break-words text-[10px] leading-relaxed text-os-muted"> — {reply.reply}</span>
+                    <span className="text-[11.5px] font-medium">{agentNames[reply.agentId] ?? reply.agentId}</span>
+                    <span className="break-words text-[11.5px] leading-relaxed text-os-muted"> — {reply.reply}</span>
                   </div>
                 </li>
               ))}

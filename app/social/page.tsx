@@ -1,7 +1,7 @@
 import type React from 'react';
 import Link from 'next/link';
 import { Instagram, Linkedin, Mail, Music2, Youtube } from 'lucide-react';
-import { XLogo } from '@/components/XLogo';
+import { XLogo } from '@/founderos/components/XLogo';
 
 /** Any icon that takes a className: the lucide set and the hand-rolled X mark
     both satisfy it, and the map does not care which it is holding. */
@@ -18,20 +18,24 @@ import {
   PLATFORM_LABELS,
 } from '@/lib/social';
 import { syncFromZernioLive } from '@/lib/social-live';
-import { zernioRecentPosts, zernioPostDaysKnown } from '@/lib/connectors/zernio';
+import { zernioRecentPosts, zernioPostDays, zernioStatus } from '@/lib/connectors/zernio';
+import { SetupLink } from '@/components/SetupLink';
+import { setupHrefFor } from '@/lib/integrations-catalog';
+import { zernioStatusPill } from '@/lib/social-status';
+import { isFilming, demoConnector } from '@/lib/demo-mode';
 import { buildEmailList } from '@/lib/email-list';
 import { likeToViewRatio, averageLikeToView, formatRatioPct } from '@/lib/engagement';
-import type { SocialPlatform } from '@/lib/schemas';
-import { Slab, SlabTitle, SlabCard, BigStat, Chip, MeterStack, InsightCard, PILL, PILL_ACCENT } from '@/components/slab';
-import { StepLine, DotMatrix } from '@/components/slab-charts';
-import { socialVolume } from '@/lib/social-volume';
-import { formatFollowers, formatPct } from '@/components/SocialStats';
-import { SocialStatStrip } from '@/components/SocialStatStrip';
+import type { SocialPlatform } from '@/founderos/lib/schemas';
+import { Slab, SlabTitle, SlabCard, BigStat, Chip, MeterStack, InsightCard, PILL, PILL_ACCENT } from '@/founderos/components/slab';
+import { StepLine, DotMatrix } from '@/founderos/components/slab-charts';
+import { socialVolume } from '@/founderos/lib/social-volume';
+import { formatFollowers, formatPct } from '@/founderos/components/SocialStats';
+import { SocialStatStrip } from '@/founderos/components/SocialStatStrip';
 import { AudienceConsistencyLazy } from '@/components/AudienceConsistencyLazy';
-import { AudiencePie } from '@/components/AudiencePie';
-import { PostComposer } from '@/components/PostComposer';
-import { CountUp } from '@/components/CountUp';
-import { Rise } from '@/components/motion';
+import { AudiencePie } from '@/founderos/components/AudiencePie';
+import { PostComposer } from '@/founderos/components/PostComposer';
+import { CountUp } from '@/founderos/components/CountUp';
+import { Rise } from '@/founderos/components/motion';
 
 export const dynamic = 'force-dynamic';
 
@@ -128,7 +132,18 @@ export default async function SocialPage() {
   // and passed down so the chart's date axis can't drift between server/client.
   const audiencePoints = audienceSeries(db).all.points;
   // null = Zernio gave no answer: the history is unknown, never "nothing posted".
-  const knownDays = await zernioPostDaysKnown().catch(() => null);
+  const knownDays = await zernioPostDays().catch(() => null);
+  // The status pill reads the connector, never a hard-coded "live" (GladOS H15).
+  const filming = isFilming();
+  const zernio = (filming ? demoConnector('zernio') : null) ?? (await zernioStatus());
+  const pill = zernioStatusPill({
+    state: zernio.state,
+    detail: zernio.detail,
+    newestSnapshot: (['instagram', 'tiktok', 'twitter', 'youtube', 'linkedin'] as const).flatMap((p) => db.social.snapshots(p)).map((x) => x.capturedAt).sort().pop() ?? null,
+    today: new Date().toISOString().slice(0, 10),
+    filming,
+    setupHref: setupHrefFor('zernio'),
+  });
   const postsKnown = knownDays !== null;
   const postDays = knownDays ?? [];
   const today = new Date().toISOString().slice(0, 10);
@@ -158,7 +173,8 @@ export default async function SocialPage() {
         meta={`${formatFollowers(total)} reach · ${postsKnown ? v.postsInWindow : '?'} posts in 30 days · ${queued} queued · ${dmInbox.length} DM threads`}
         right={
           <>
-            <Chip tone="ok">zernio live</Chip>
+            <Chip tone={pill.tone === 'ok' ? 'ok' : 'warn'}>{pill.text}</Chip>
+            {pill.setupHref && <SetupLink href={pill.setupHref} />}
             <Link href="/social/beehiiv" className={PILL}>
               Beehiiv
             </Link>

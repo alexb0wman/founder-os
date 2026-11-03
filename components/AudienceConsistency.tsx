@@ -5,39 +5,33 @@ import { Maximize2, X } from 'lucide-react';
 import {
   bucketPostingByDay,
   dateAxis,
-  forwardFill,
+  forwardFillCarried,
   platformsPresent,
   type PostDay,
   type PostingActivityDay,
 } from '@/lib/posting-activity';
+import { channelColor } from '@/lib/series';
+import { channelsNetChange, rangeWindow } from '@/lib/social-range';
 
-type Range = 30 | 90 | 365;
-const RANGES: Range[] = [30, 90, 365];
-const RANGE_LABEL: Record<string, string> = { '30': '30d', '90': '90d', '365': '1y' };
+type Range = 7 | 30 | 60 | 'all';
+const RANGES: Range[] = [7, 30, 60, 'all'];
+const RANGE_LABEL: Record<string, string> = { '7': '7d', '30': '30d', '60': '60d', all: 'All' };
 
 type AudPoint = { date: string; value: number };
 
-// Stack/legend order; colors mirror lib/social PLATFORM_COLORS (kept local so
-// this client component never pulls the node-only connector graph into the
-// browser bundle) + a Facebook entry the server palette doesn't track.
+// Stack/legend order (a Facebook entry the server palette doesn't track sorts
+// last). Colours come from the one channel -> series map (lib/series.ts, SPEC
+// C19), the same slots /social's pop-outs, /analytics and Home use.
 const PREFERRED = ['instagram', 'tiktok', 'twitter', 'youtube', 'linkedin', 'facebook'];
-const COLORS: Record<string, string> = {
-  instagram: '#e1306c',
-  tiktok: '#25f4ee',
-  twitter: '#f2f2f2',
-  youtube: '#ff4d4d',
-  linkedin: '#0a85c2',
-  facebook: '#1877f2',
-};
 const LABELS: Record<string, string> = {
   instagram: 'Instagram',
   tiktok: 'TikTok',
-  twitter: 'X',
+  twitter: 'Twitter / X',
   youtube: 'YouTube',
   linkedin: 'LinkedIn',
   facebook: 'Facebook',
 };
-const colorFor = (p: string): string => COLORS[p] ?? 'var(--accent)';
+const colorFor = (p: string): string => channelColor(p);
 const labelFor = (p: string): string => LABELS[p] ?? p.charAt(0).toUpperCase() + p.slice(1);
 
 function fmtDay(d: string): string {
@@ -51,11 +45,11 @@ function RangeChips({ value, onChange }: { value: Range; onChange: (r: Range) =>
         <button
           key={String(r)}
           onClick={() => onChange(r)}
-          data-lens="c" className={`pressable rounded-ctl border px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] ${
- value === r
- ? 'border-[var(--accent-line)] bg-[var(--accent-soft)] text-os-accent'
- : 'border-os-border text-os-dim hover:border-os-border-strong hover:text-os-muted'
- }`}
+          className={`rounded-sm-t border px-2 py-0.5 text-[11.5px] transition-colors ${
+            value === r
+              ? 'border-[var(--accent-line)] bg-[var(--accent-soft)] text-os-accent'
+              : 'border-os-border text-os-dim hover:bg-os-surface2 hover:text-os-muted'
+          }`}
         >
           {RANGE_LABEL[String(r)]}
         </button>
@@ -70,6 +64,8 @@ function RangeChips({ value, onChange }: { value: Range; onChange: (r: Range) =>
 function ChartPair({
   axis,
   audienceVals,
+  carried,
+  from,
   days,
   platforms,
   audClass,
@@ -77,6 +73,10 @@ function ChartPair({
 }: {
   axis: string[];
   audienceVals: (number | null)[];
+  /** Per axis day: value carried from an earlier point (dashed). */
+  carried: boolean[];
+  /** Per axis day: the date the value came from. */
+  from: (string | null)[];
   days: PostingActivityDay[];
   platforms: string[];
   audClass: string;
@@ -96,10 +96,22 @@ function ChartPair({
   const aMax = known.length ? Math.max(...known) : 1;
   const aMin = known.length ? Math.min(...known) : 0;
   const yA = (v: number) => HA - PAD - ((v - aMin) / Math.max(1, aMax - aMin)) * (HA - 2 * PAD);
-  const firstKnown = audienceVals.findIndex((v) => v != null);
-  const audPts =
-    firstKnown < 0 ? [] : audienceVals.map((v, i) => (v == null ? null : ([xAt(i), yA(v)] as const))).filter(Boolean) as [number, number][];
+  const audIdx = audienceVals.flatMap((v, i) => (v == null ? [] : [i]));
+  const audPts = audIdx.map((i) => [xAt(i), yA(audienceVals[i]!)] as [number, number]);
   const audLine = audPts.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(' ');
+  // Segments ending on a carried day (a gap or the tail after the last sync)
+  // draw dashed; segments ending on a real point draw solid.
+  const segPath = (wantCarried: boolean) =>
+    audIdx
+      .slice(1)
+      .map((i, k) =>
+        carried[i] === wantCarried
+          ? `M${audPts[k][0].toFixed(1)},${audPts[k][1].toFixed(1)} L${audPts[k + 1][0].toFixed(1)},${audPts[k + 1][1].toFixed(1)}`
+          : '',
+      )
+      .join(' ');
+  const solidLine = segPath(false);
+  const carriedLine = segPath(true);
 
   // posting scale
   const dayMax = Math.max(1, ...days.map((d) => d.total));
@@ -129,17 +141,17 @@ function ChartPair({
       {/* audience */}
       <div className={audClass}>
         <svg viewBox={`0 0 ${W} ${HA}`} preserveAspectRatio="none" className="block h-full w-full">
-          <defs>
-            <linearGradient id="ac-area" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.2" />
-              <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
-            </linearGradient>
-          </defs>
           {[0.33, 0.66].map((g) => (
             <line key={g} x1="0" x2={W} y1={HA - PAD - g * (HA - 2 * PAD)} y2={HA - PAD - g * (HA - 2 * PAD)} stroke="var(--border)" strokeDasharray="2 4" />
           ))}
-          {audPts.length > 1 && <path d={`${audLine} L${audPts[audPts.length - 1][0]},${HA} L${audPts[0][0]},${HA} Z`} fill="url(#ac-area)" />}
-          {audPts.length > 1 && <path d={audLine} pathLength={1} className="draw" fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" />}
+          {/* flat low-opacity area fill — the Spark idiom; gradients retired with Console */}
+          {audPts.length > 1 && (
+            <path d={`${audLine} L${audPts[audPts.length - 1][0]},${HA} L${audPts[0][0]},${HA} Z`} fill="var(--accent)" opacity="0.08" />
+          )}
+          {solidLine && <path d={solidLine} fill="none" stroke="var(--accent)" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />}
+          {carriedLine && (
+            <path d={carriedLine} fill="none" stroke="var(--accent)" strokeWidth="2" strokeDasharray="4 5" strokeOpacity="0.6" data-carried="" />
+          )}
           {crosshair(HA)}
           {hover != null && audienceVals[hover] != null && (
             <circle cx={xAt(hover)} cy={yA(audienceVals[hover]!)} r="3.5" fill="var(--accent)" stroke="var(--surface)" strokeWidth="2" />
@@ -150,16 +162,16 @@ function ChartPair({
         </svg>
       </div>
 
-      <div className="mt-1.5 flex justify-between font-mono text-[9.5px] text-os-dim">
+      <div className="mt-1.5 flex justify-between font-mono text-[11px] text-os-dim">
         <span>{axis[0] ? fmtDay(axis[0]) : ''}</span>
         <span>today</span>
       </div>
 
       <div className="my-3.5 h-px bg-os-border" />
 
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-os-dim">Posting consistency</span>
-        <span className="font-mono text-[11px] text-os-muted">
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <span className="text-[13px] font-medium text-os-muted">Posting consistency</span>
+        <span className="text-[12.5px] text-os-muted tabular-nums">
           {days.reduce((s, d) => s + d.total, 0)} posts · {platforms.length} platforms
         </span>
       </div>
@@ -190,7 +202,7 @@ function ChartPair({
         </svg>
       </div>
 
-      <div className="mt-1.5 flex justify-between font-mono text-[9.5px] text-os-dim">
+      <div className="mt-1.5 flex justify-between font-mono text-[11px] text-os-dim">
         <span>{axis[0] ? fmtDay(axis[0]) : ''}</span>
         <span>today</span>
       </div>
@@ -202,19 +214,22 @@ function ChartPair({
           className="pointer-events-none absolute top-0 z-10 -translate-x-1/2"
           style={{ left: `${Math.min(88, Math.max(12, tooltipLeft))}%` }}
         >
-          <div className="min-w-[150px] rounded-panel border border-os-border-strong bg-os-bg/95 px-2.5 py-2 font-mono shadow-lg backdrop-blur-sm">
-            <div className="mb-1 flex items-center justify-between gap-3 text-[10px] text-os-dim">
+          <div className="c-pop min-w-[150px] px-2.5 py-3">
+            <div className="mb-1 flex items-center justify-between gap-4 font-mono text-[11.5px] text-os-dim">
               <span>{axis[hover] ? fmtDay(axis[hover]) : ''}</span>
               <span className="text-os-muted">
                 {audienceVals[hover] != null ? audienceVals[hover]!.toLocaleString('en-US') : '—'} aud
               </span>
             </div>
+            {carried[hover] && from[hover] && (
+              <div className="mb-1 text-[11.5px] text-os-dim">carried from {fmtDay(from[hover]!)}</div>
+            )}
             {hoverEntries.length === 0 ? (
-              <div className="text-[10px] text-os-dim">no posts</div>
+              <div className="text-[11.5px] text-os-dim">No posts</div>
             ) : (
               <div className="flex flex-col gap-0.5">
                 {hoverEntries.map((p) => (
-                  <div key={p} className="flex items-center gap-1.5 text-[10.5px] text-os-text">
+                  <div key={p} className="flex items-center gap-2.5 text-[12px] text-os-text">
                     <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: colorFor(p) }} />
                     <span className="flex-1">{labelFor(p)}</span>
                     {(hoverDay!.counts[p] ?? 0) > 1 && <span className="text-os-dim">×{hoverDay!.counts[p]}</span>}
@@ -237,12 +252,12 @@ function PlatformLegend({ platforms, days }: { platforms: string[]; days: Postin
   }, [platforms, days]);
   if (platforms.length === 0) return null;
   return (
-    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+    <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2.5">
       {platforms.map((p) => (
-        <div key={p} className="flex items-center gap-1.5 font-mono text-[10.5px]">
-          <span className="h-2 w-2 rounded-full" style={{ background: colorFor(p) }} />
+        <div key={p} className="flex items-center gap-2.5 text-[12.5px]">
+          <span className="h-[13px] w-[13px] rounded-[4px]" style={{ background: colorFor(p) }} />
           <span className="text-os-muted">{labelFor(p)}</span>
-          <span className="text-os-dim">{totals[p] ?? 0}</span>
+          <span className="text-os-dim tabular-nums">{totals[p] ?? 0}</span>
         </div>
       ))}
     </div>
@@ -254,39 +269,51 @@ function PlatformLegend({ platforms, days }: { platforms: string[]; days: Postin
     a fullscreen view of the same two charts. */
 export function AudienceConsistency({
   audience,
+  channels,
   postDays,
   today,
   aside,
 }: {
   audience: AudPoint[];
+  /** Each audience channel's own points. "+N net" sums the channels that
+      reach back to the window start, the same helper as the Audience growth
+      tile (lib/social-range.ts), so the two always agree. */
+  channels?: AudPoint[][];
   postDays: PostDay[];
   today: string;
   /** Rendered as a right-hand column sharing the card with the charts. */
   aside?: React.ReactNode;
 }) {
-  const [range, setRange] = useState<Range>(90);
+  const [range, setRange] = useState<Range>(30);
   const [expanded, setExpanded] = useState(false);
 
-  const { axis, audienceVals, days, platforms, net } = useMemo(() => {
-    const dates = [...audience.map((a) => a.date), ...postDays.map((p) => p.date)].sort();
-    const earliest = dates[0] ?? today;
-    const end = today;
-    const d = new Date(`${end}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() - (range - 1));
-    // Never ask the chart for days older than the data actually has.
-    const start = d.toISOString().slice(0, 10) < earliest ? earliest : d.toISOString().slice(0, 10);
+  const { axis, audienceVals, carried, from, days, platforms, net, stale, lastSynced } = useMemo(() => {
+    // One window for the line, the bars and "+N net" (lib/social-range.ts):
+    // it ends on the newest audience point and the axis runs on to today, so
+    // a stale sync shows as a dashed carried tail instead of a blank chart.
+    const sorted = [...audience].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    const dates = [...sorted.map((a) => a.date), ...postDays.map((p) => p.date)].sort();
+    const window = rangeWindow(range, sorted.at(-1)?.date ?? null, today, dates[0] ?? null);
+    const start = window.start;
+    const end = window.axisEnd;
     const axis = dateAxis(start, end);
-    const audienceVals = forwardFill(
-      audience.map((a) => ({ date: a.date, value: a.value })),
-      axis,
-    );
+    const filled = forwardFillCarried(sorted, axis);
     const inRangePosts = postDays.filter((p) => p.date >= start && p.date <= end);
     const days = bucketPostingByDay(inRangePosts, axis);
     const platforms = platformsPresent(inRangePosts, PREFERRED);
-    const known = audienceVals.filter((v): v is number => v != null);
-    const net = known.length > 1 ? known[known.length - 1] - known[0] : 0;
-    return { axis, audienceVals, days, platforms, net };
-  }, [audience, postDays, today, range]);
+    const net = channelsNetChange(channels ?? [sorted], range, today)?.net ?? null;
+    return {
+      axis,
+      audienceVals: filled.values,
+      carried: filled.carried,
+      from: filled.from,
+      days,
+      platforms,
+      net,
+      stale: window.stale,
+      lastSynced: sorted.at(-1)?.date ?? null,
+    };
+  }, [audience, channels, postDays, today, range]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -300,29 +327,37 @@ export function AudienceConsistency({
     };
   }, [expanded]);
 
-  const netLabel = (
-    <span className={`font-mono text-[11px] ${net >= 0 ? 'text-os-ok' : 'text-os-err'}`}>
-      {net >= 0 ? '▲' : '▼'} {net >= 0 ? '+' : ''}
-      {net.toLocaleString('en-US')} net
-    </span>
-  );
+  // Same helper as the Audience growth tile (H18): unknown is absent, not 0.
+  const netLabel =
+    net == null ? null : (
+      <span className={`font-mono text-[12.5px] ${net >= 0 ? 'text-os-ok' : 'text-os-err'}`}>
+        {net >= 0 ? '▲' : '▼'} {net >= 0 ? '+' : ''}
+        {net.toLocaleString('en-US')} net
+      </span>
+    );
+  const staleNote =
+    stale && lastSynced ? (
+      <p className="mt-2 text-[12px] text-os-dim" data-stale-note="">
+        Last synced {fmtDay(lastSynced)}. The dashed line carries that value forward.
+      </p>
+    ) : null;
 
   return (
     <div className="rounded-lg-t border border-os-border bg-os-surface px-5 py-[18px]">
       {/* the charts share the card with the aside (audience pie) — the pie
           rides shotgun on the right, not slammed underneath */}
-      <div className={aside ? 'grid gap-6 lg:grid-cols-[1.55fr_1fr]' : ''}>
+      <div className={aside ? 'grid grid-cols-1 gap-6 lg:grid-cols-[1.55fr_1fr]' : ''}>
         <div className="flex min-w-0 flex-col">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-os-dim">Audience · {RANGE_LABEL[String(range)]}</span>
-            <div className="flex items-center gap-2.5">
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+            <span className="text-[13px] font-medium text-os-muted">Combined audience</span>
+            <div className="flex flex-wrap items-center gap-3.5">
               {netLabel}
               <RangeChips value={range} onChange={setRange} />
               <button
                 onClick={() => setExpanded(true)}
                 aria-label="Expand to fullscreen"
                 title="Fullscreen"
-                className="pressable flex h-[22px] w-[22px] items-center justify-center rounded-ctl border border-os-border text-os-dim hover:border-os-border-strong hover:text-os-accent"
+                className="flex h-[22px] w-[22px] items-center justify-center rounded-sm-t border border-os-border text-os-dim transition-colors hover:bg-os-surface2 hover:text-os-text"
               >
                 <Maximize2 className="h-3 w-3" />
               </button>
@@ -332,17 +367,20 @@ export function AudienceConsistency({
           <ChartPair
             axis={axis}
             audienceVals={audienceVals}
+            carried={carried}
+            from={from}
             days={days}
             platforms={platforms}
             audClass="min-h-[140px] grow-[1.6] basis-[140px]"
             postClass="min-h-[84px] grow basis-[84px]"
           />
+          {staleNote}
 
           <PlatformLegend platforms={platforms} days={days} />
         </div>
 
         {aside && (
-          <div className="flex min-w-0 flex-col justify-center max-lg:mt-4 max-lg:border-t max-lg:border-os-border max-lg:pt-4 lg:border-l lg:border-os-border lg:pl-6">
+          <div className="flex min-w-0 flex-col justify-center max-lg:mt-5 max-lg:border-t max-lg:border-os-border max-lg:pt-4 lg:border-l lg:border-os-border lg:pl-6">
             {aside}
           </div>
         )}
@@ -354,20 +392,20 @@ export function AudienceConsistency({
           onClick={() => setExpanded(false)}
         >
           <div
-            className="flex max-h-[94vh] w-[min(1240px,96vw)] flex-col overflow-hidden rounded-panel border border-os-border-strong bg-os-bg shadow-2xl"
+            className="c-pop flex max-h-[94vh] w-[min(1240px,96vw)] flex-col overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-os-border px-5 py-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-4 border-b border-os-border px-5 py-3.5">
               <div>
-                <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-os-dim">social</div>
-                <div className="mt-0.5 text-[15px] font-semibold">Combined audience &amp; posting consistency</div>
+                <div className="text-[15px] font-medium">Combined audience &amp; posting consistency</div>
+                <div className="mt-0.5 text-[12.5px] text-os-muted">Social</div>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-4">
                 <RangeChips value={range} onChange={setRange} />
                 <button
                   onClick={() => setExpanded(false)}
                   aria-label="Close"
-                  className="pressable flex h-7 w-7 items-center justify-center rounded-ctl border border-os-border text-os-dim hover:border-os-border-strong hover:text-os-text"
+                  className="flex h-7 w-7 items-center justify-center rounded-sm-t border border-os-border text-os-dim transition-colors hover:bg-os-surface2 hover:text-os-text"
                 >
                   <X className="h-4 w-4" />
                 </button>
@@ -376,17 +414,20 @@ export function AudienceConsistency({
 
             <div className="flex-1 overflow-y-auto px-5 py-4">
               <div className="mb-2 flex items-center justify-between">
-                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-os-dim">Audience · {RANGE_LABEL[String(range)]}</span>
+                <span className="text-[13px] font-medium text-os-muted">Combined audience</span>
                 {netLabel}
               </div>
               <ChartPair
                 axis={axis}
                 audienceVals={audienceVals}
+                carried={carried}
+                from={from}
                 days={days}
                 platforms={platforms}
                 audClass="h-[clamp(240px,40vh,420px)]"
                 postClass="h-[clamp(160px,26vh,300px)]"
               />
+              {staleNote}
               <PlatformLegend platforms={platforms} days={days} />
             </div>
           </div>

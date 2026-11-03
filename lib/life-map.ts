@@ -1,6 +1,6 @@
 /**
- * Alex's life map: the radial taxonomy at the heart of the OS.
- * Center = Alex's life; ring 1 = color-coded life areas; ring 2 = the
+ * the operator's life map: the radial taxonomy at the heart of the OS.
+ * Center = the operator's life; ring 1 = color-coded life areas; ring 2 = the
  * modules inside each area. Communication additionally carries the contact
  * tier system — the numbered/colored response-priority ladder for people.
  *
@@ -8,6 +8,7 @@
  * each life area owns a hue, and everything underneath inherits it.
  */
 import type { LifeMap, LifeMapNode } from '@/lib/schemas';
+import { OPERATOR_NAME } from '@/lib/operator';
 
 export type LifeModule = { id: string; label: string; detail: string };
 
@@ -35,7 +36,7 @@ export const LIFE_AREAS: LifeArea[] = [
       { id: 'sms', label: 'SMS', detail: 'Text blasts and reminders.' },
       { id: 'editing', label: 'Editing', detail: 'Cuts, captions, and post-production.' },
     ],
-    agents: ['social-agent', 'postly-publisher', 'adsmith-creative', 'reelkit-editor', 'renderly-creative', 'dmflow-mcp', 'social-pulse'],
+    agents: ['team-briefing'],
     brainFolders: ['media', 'writing', 'ideas'],
     departmentIds: ['dept-marketing-growth'],
   },
@@ -50,18 +51,7 @@ export const LIFE_AREAS: LifeArea[] = [
       { id: 'follow-up', label: 'Follow-up', detail: 'Next actions and reminders.' },
       { id: 'offers', label: 'Offers', detail: 'Proposals, pricing, and close paths.' },
     ],
-    agents: [
-      'sales-agent',
-      'crm-pulse',
-      'launchpad-cohort-sales',
-      'vantage-sales',
-      'paykit-sales',
-      'vantage-paykit',
-      'stripe-sales',
-      'processor-confirmation',
-      'flexpay-financing',
-      'sales-calls-data',
-    ],
+    agents: ['sales-agent', 'crm-pulse', 'deal-scanner', 'deal-alerts'],
     brainFolders: ['people', 'companies', 'hiring'],
     departmentIds: ['dept-sales'],
   },
@@ -76,7 +66,7 @@ export const LIFE_AREAS: LifeArea[] = [
       { id: 'subscriptions', label: 'Subscriptions', detail: 'Recurring revenue and churn.' },
       { id: 'bookkeeping', label: 'Bookkeeping', detail: 'Categorized, reconciled, tax-ready.' },
     ],
-    agents: ['payments-pulse'],
+    agents: [],
     brainFolders: ['companies'],
     departmentIds: ['dept-finance'],
   },
@@ -96,7 +86,7 @@ export const LIFE_AREAS: LifeArea[] = [
       { id: 'slack', label: 'Slack', detail: 'Workspace messages and mentions.' },
       { id: 'meetings', label: 'Meetings', detail: 'Notes and follow-ups.' },
     ],
-    agents: ['comms-agent', 'gmail-worker', 'whatsapp-worker', 'slack-worker'],
+    agents: ['comms-agent', 'gmail-worker', 'whatsapp-worker', 'slack-worker', 'draft-approval-bot', 'inbound-watcher', 'brand-deal-drafter', 'gsend-sender'],
     brainFolders: ['inbox', 'meetings', 'people'],
     departmentIds: ['dept-comms'],
   },
@@ -111,7 +101,7 @@ export const LIFE_AREAS: LifeArea[] = [
       { id: 'service', label: 'Service', detail: 'Check-in cadence and deliverable tracking.' },
       { id: 'renewals', label: 'Renewals', detail: 'Expansion and renewal timing.' },
     ],
-    agents: ['client-roster', 'client-onboarding', 'client-success'],
+    agents: [],
     brainFolders: ['people', 'companies'],
     departmentIds: ['dept-clients'],
   },
@@ -119,14 +109,14 @@ export const LIFE_AREAS: LifeArea[] = [
     id: 'knowledge',
     label: 'Knowledge',
     color: '#a855f7',
-    detail: 'G-Brain: markdown, vectors, and recall.',
+    detail: 'Optimal Engine: markdown, vectors, and recall.',
     modules: [
       { id: 'brain-store', label: 'Brain store', detail: 'Markdown source of truth on disk.' },
       { id: 'vector-db', label: 'Vector DB', detail: 'Chunks → embeddings → pgvector.' },
       { id: 'prompts', label: 'Prompts', detail: 'Reusable prompt library.' },
       { id: 'sources', label: 'Sources', detail: 'Reference material and citations.' },
     ],
-    agents: ['data-agent', 'markdown-auditor', 'vector-auditor', 'notion-sync', 'brain-librarian'],
+    agents: ['data-agent', 'markdown-auditor', 'vector-auditor', 'notion-sync'],
     brainFolders: ['concepts', 'prompts', 'sources', 'archive'],
     departmentIds: ['dept-tech'],
   },
@@ -143,7 +133,7 @@ export const LIFE_AREAS: LifeArea[] = [
     ],
     // dept-tech rolls up to knowledge first (lifeAreaForDepartment takes the
     // first match); operations still owns the conductor + stack agents.
-    agents: ['conductor', 'stack-monitor'],
+    agents: ['conductor', 'stack-monitor', 'daily-briefing', 'automation-jobs'],
     brainFolders: ['org', 'projects', 'hiring'],
     departmentIds: ['dept-tech'],
   },
@@ -158,10 +148,14 @@ export type ContactTier = {
 };
 
 /**
- * The response-priority ladder for people Alex talks to.
+ * The response-priority ladder for people the operator talks to.
  * 1 = red (clients & students), 2 = yellow (brand), 3 = green (personal).
  * Specific people get overrides via the contact_tags table.
  */
+// Kept as literal hex — this feeds the /api/life/map route, which
+// LifeMapSchema validates with a strict hex-color regex (server side, so
+// there's no theme to key off anyway). The red re-tone happens where this is
+// actually rendered: CommsGravity swaps these via usePalette() at draw time.
 export const CONTACT_TIERS: ContactTier[] = [
   { tier: 1, label: 'Priority 1', color: '#ef4444', respond: 'ASAP', tags: ['client', 'student'] },
   { tier: 2, label: 'Priority 2', color: '#eab308', respond: 'same day', tags: ['brand', 'partner', 'lead'] },
@@ -177,7 +171,7 @@ export function buildLifeMap(): LifeMap {
     {
       id: 'center',
       type: 'center',
-      label: "Alex's Life",
+      label: `${OPERATOR_NAME}'s Life`,
       color: '#fafafa',
       parent: null,
       detail: 'The core. Everything orbits this.',

@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getDb } from '@/lib/data';
 import { SocialPlatformSchema, type SocialPost } from '@/lib/schemas';
-import { zernioPublish } from '@/lib/connectors/zernio';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,55 +15,43 @@ const CreateSchema = z.object({
   caption: z.string().min(1, 'caption is required'),
   platforms: z.array(SocialPlatformSchema).min(1, 'pick at least one platform'),
   mediaUrl: z.string().url().nullish(),
-  mediaUrls: z.array(z.string().url()).optional(),
   scheduledFor: z.string().nullish(),
 });
 
 /**
- * Post for REAL via Zernio/Late (the operator). Immediate posts publish
- * now; scheduledFor rides to Late so their scheduler fires it. The record
- * lands in the local queue with an honest status: published / queued
- * (scheduled) / failed (with the error surfaced). Publishing is skipped
- * under NODE_ENV=test so the suite never hits the live API.
+ * Queue a post for the Zernio-publishing agent. This does NOT post live — it
+ * persists with status 'queued'; the Social agent on the Agents page picks it
+ * up. Wiring an actual Zernio publish is a deliberate later step.
  */
 export async function POST(request: Request) {
   const parsed = CreateSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
-  const mediaUrls = parsed.data.mediaUrls?.length
-    ? parsed.data.mediaUrls
-    : parsed.data.mediaUrl
-      ? [parsed.data.mediaUrl]
-      : [];
-
-  let status: SocialPost['status'] = 'queued';
-  let publishError: string | null = null;
-  if (process.env.NODE_ENV !== 'test') {
-    const result = await zernioPublish({
-      caption: parsed.data.caption,
-      mediaUrls,
-      platforms: parsed.data.platforms,
-      scheduledFor: parsed.data.scheduledFor ?? null,
-    });
-    if (result.ok) status = parsed.data.scheduledFor ? 'queued' : 'published';
-    else {
-      status = 'failed';
-      publishError = result.error;
-    }
-  }
-
   const post: SocialPost = {
     id: randomUUID(),
     caption: parsed.data.caption,
-    mediaUrl: mediaUrls[0] ?? null,
+    mediaUrl: parsed.data.mediaUrl ?? null,
     platforms: parsed.data.platforms,
-    status,
+    status: 'queued',
     scheduledFor: parsed.data.scheduledFor ?? null,
     createdAt: new Date().toISOString(),
   };
   getDb().socialPosts.enqueue(post);
-  return NextResponse.json(
-    publishError ? { post, error: publishError } : { post },
-    { status: publishError ? 502 : 201 },
-  );
+  return NextResponse.json({ post }, { status: 201 });
+}
+
+/**
+ * Withdraw a queued post: DELETE /api/social/posts?id=<id> (SPEC H40). Only a
+ * post still in the queue can go; anything the agent has picked up answers
+ * 409 so the UI restores the row. Nothing is sent or published here.
+ */
+export async function DELETE(request: Request) {
+  const id = new URL(request.url).searchParams.get('id');
+  if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 });
+  const result = getDb().socialPosts.removeQueued(id);
+  if (result === 'missing') return NextResponse.json({ error: 'no such post' }, { status: 404 });
+  if (result === 'not_queued') {
+    return NextResponse.json({ error: 'already picked up for publishing' }, { status: 409 });
+  }
+  return NextResponse.json({ removed: id });
 }

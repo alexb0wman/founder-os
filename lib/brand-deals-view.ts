@@ -1,211 +1,134 @@
-import type { BrandDeal } from '@/lib/schemas';
-
 /**
- * View model for the /brand-deals slab (the Slab "Deal Journeys" layout,
- * imported and fed by the Notion Brand Deals Hub instead of the
- * bdpilot daemon). Pure: every figure the slab shows is derived here from the
- * BrandDeal rows the connector already validated, so the component stays a
- * renderer and the numbers stay testable.
- *
- * Money rule: a deal is worth what was agreed, else its stated value, else
- * the brand's budget, else nothing. The suggested rate is our wish, not a
- * number the brand said, so it never counts.
+ * Pure view helpers for /brand-deals (SPEC S02 §7, X4). The page's charts
+ * and the tests share these, so the chart can never draw a figure the
+ * snapshot does not hold. Client-safe: no node imports.
  */
 
-export type DealBucket = 'inbound' | 'talking' | 'producing' | 'billing' | 'paid' | 'declined' | 'paused' | 'other';
+import type { BrandDealsSnapshot, Deal } from '@/lib/brand-deals';
 
-const BUCKET: Record<string, DealBucket> = {
-  New: 'inbound',
-  Negotiating: 'talking',
-  Aligned: 'talking',
-  Researching: 'producing',
-  Filming: 'producing',
-  Editing: 'producing',
-  Delivered: 'producing',
-  Invoiced: 'billing',
-  Approved: 'billing',
-  Paid: 'paid',
-  Declined: 'declined',
-  Paused: 'paused',
+/** Stage filter keys the board understands (chips, chart columns, slash tokens). */
+export type DealFilter = 'all' | 'approval' | 'sent' | 'unique' | 'won' | 'lost' | 'closed';
+
+export type StageBarSegment = { key: 'won' | 'lost'; label: string; usd: number; count: number };
+
+export type StageBarColumn = {
+  /** The stage filter a click on this column sets. */
+  key: Extract<DealFilter, 'all' | 'sent' | 'approval' | 'closed'>;
+  label: string;
+  /** Bar height measure (Q-REV-1: the Pipeline chart is drawn in dollars). */
+  usd: number;
+  /** Secondary figure: how many deals sit in the column. */
+  count: number;
+  /** Closed only: won over lost, summing to `usd` and `count`. */
+  segments?: StageBarSegment[];
 };
 
-/** Notion lane to journey bucket. Unknown lanes are kept as `other` rather
- *  than dropped: hiding a deal is worse than an odd label. */
-export function bucketOf(status: string): DealBucket {
-  return BUCKET[status] ?? 'other';
-}
-
-export function dealUsd(d: BrandDeal): number {
-  return d.amountAgreedUsd ?? d.dealValueUsd ?? d.budgetUsd ?? 0;
-}
-
-export function isOpen(d: BrandDeal): boolean {
-  const b = bucketOf(d.status);
-  return b !== 'paid' && b !== 'declined' && b !== 'paused';
-}
-
-export type Filter = 'all' | 'talks' | 'production' | 'paid' | 'declined' | 'tier-s';
-
-export function matchesFilter(d: BrandDeal, f: Filter): boolean {
-  const b = bucketOf(d.status);
-  switch (f) {
-    case 'all':
-      return true;
-    case 'talks':
-      return b === 'inbound' || b === 'talking';
-    case 'production':
-      return b === 'producing' || b === 'billing';
-    case 'paid':
-      return b === 'paid';
-    case 'declined':
-      return b === 'declined' || b === 'paused';
-    case 'tier-s':
-      return (d.tier ?? '').trim().toUpperCase() === 'S';
-  }
-}
-
-const SLASH: Record<string, Filter> = {
-  '/talks': 'talks',
-  '/production': 'production',
-  '/paid': 'paid',
-  '/declined': 'declined',
-  '/s': 'tier-s',
-  '/tier-s': 'tier-s',
-};
-
-/** A leading slash token is a filter; whatever follows is free text. An
- *  unknown token is echoed back (so the pill shows it) but filters nothing. */
-export function parseQuery(q: string): { slash: string | null; token: Filter | null; text: string } {
-  const t = q.trim();
-  if (t.startsWith('/')) {
-    const slash = t.split(/\s+/)[0];
-    return { slash, token: SLASH[slash.toLowerCase()] ?? null, text: t.slice(slash.length).trim().toLowerCase() };
-  }
-  return { slash: null, token: null, text: t.toLowerCase() };
-}
-
-export function filterDeals(deals: BrandDeal[], opts: { filter: Filter; query: string }): BrandDeal[] {
-  const { token, text } = parseQuery(opts.query);
-  return deals.filter((d) => {
-    if (!matchesFilter(d, opts.filter)) return false;
-    if (token && !matchesFilter(d, token)) return false;
-    if (text) {
-      const hay = [d.brand, d.contactName, d.contactEmail, d.status, d.mainChannel, d.videoType, d.source, d.tier]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      if (!hay.includes(text)) return false;
-    }
-    return true;
-  });
-}
-
-export type Volume = {
-  openUsd: number;
-  talksUsd: number;
-  productionUsd: number;
-  paidUsd: number;
-  declinedUsd: number;
-  quotedDeals: number;
-  counts: { all: number; talks: number; production: number; paid: number; declined: number; tierS: number };
-};
-
-export function volume(deals: BrandDeal[]): Volume {
-  const sum = (f: Filter) => deals.filter((d) => matchesFilter(d, f)).reduce((n, d) => n + dealUsd(d), 0);
-  const count = (f: Filter) => deals.filter((d) => matchesFilter(d, f)).length;
-  const talksUsd = sum('talks');
-  const productionUsd = sum('production');
-  return {
-    openUsd: talksUsd + productionUsd,
-    talksUsd,
-    productionUsd,
-    paidUsd: sum('paid'),
-    declinedUsd: sum('declined'),
-    quotedDeals: deals.filter((d) => dealUsd(d) > 0).length,
-    counts: {
-      all: deals.length,
-      talks: count('talks'),
-      production: count('production'),
-      paid: count('paid'),
-      declined: count('declined'),
-      tierS: count('tier-s'),
-    },
-  };
-}
-
-export type FunnelStage = { label: string; value: number; usd: number; note: string; filter: Filter };
-
-/** Four hero columns, each a working filter, each carrying its dollars. */
-export function funnelStages(deals: BrandDeal[]): FunnelStage[] {
-  const v = volume(deals);
-  const declined = deals.filter((d) => bucketOf(d.status) === 'declined').length;
-  const paused = deals.filter((d) => bucketOf(d.status) === 'paused').length;
+/**
+ * The four Pipeline columns, in order: Announced (every tracked thread),
+ * Awaiting brand (sent), Needs approval, Closed (won over lost). The open
+ * columns read `volume` directly so they always match the Deal Volume card.
+ */
+export function stageBars(snap: Pick<BrandDealsSnapshot, 'deals' | 'counts' | 'volume'>): StageBarColumn[] {
+  const { deals, counts, volume } = snap;
+  const quotedAll = deals.reduce((n, d) => n + (d.quotedUsd ?? 0), 0);
   return [
-    { label: 'All deals', value: v.counts.all, usd: deals.reduce((n, d) => n + dealUsd(d), 0), note: 'every deal in the hub', filter: 'all' },
-    { label: 'In talks', value: v.counts.talks, usd: v.talksUsd, note: 'inbound and negotiating', filter: 'talks' },
-    { label: 'In production', value: v.counts.production, usd: v.productionUsd, note: 'researching through invoiced', filter: 'production' },
-    { label: 'Paid', value: v.counts.paid, usd: v.paidUsd, note: `${declined} declined · ${paused} paused`, filter: 'paid' },
+    { key: 'all', label: 'Announced', usd: quotedAll, count: deals.length },
+    { key: 'sent', label: 'Awaiting brand', usd: volume.awaitingUsd, count: counts.sent },
+    { key: 'approval', label: 'Needs approval', usd: volume.approvalUsd, count: counts.approval },
+    {
+      key: 'closed',
+      label: 'Closed',
+      usd: volume.wonUsd + volume.lostUsd,
+      count: counts.won + counts.lost,
+      segments: [
+        { key: 'won', label: 'Won', usd: volume.wonUsd, count: counts.won },
+        { key: 'lost', label: 'Lost', usd: volume.lostUsd, count: counts.lost },
+      ],
+    },
   ];
 }
 
-const DAY = 86_400_000;
-const utcDay = (t: number) => Math.floor(t / DAY) * DAY;
-const label = (t: number) => {
-  const d = new Date(t);
-  return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}`;
+/* ---------------------------------------------------------- chain depth */
+
+export type ChainDepthBucket = '1' | '2-3' | '4-5' | '6-9' | '10+';
+
+/** The Chains card's columns, shortest thread first. */
+export const CHAIN_DEPTH_BUCKETS: readonly ChainDepthBucket[] = ['1', '2-3', '4-5', '6-9', '10+'];
+
+/** Which depth column a thread of `n` cached messages falls in; null when it has none. */
+export function chainDepthBucket(n: number): ChainDepthBucket | null {
+  if (!Number.isFinite(n) || n < 1) return null;
+  if (n === 1) return '1';
+  if (n <= 3) return '2-3';
+  if (n <= 5) return '4-5';
+  if (n <= 9) return '6-9';
+  return '10+';
+}
+
+/** Deal count per depth column, in `CHAIN_DEPTH_BUCKETS` order. */
+export function chainDepthColumns(deals: Pick<Deal, 'chainLen'>[]): { label: ChainDepthBucket; count: number }[] {
+  const counts = new Map<ChainDepthBucket, number>(CHAIN_DEPTH_BUCKETS.map((b) => [b, 0]));
+  for (const d of deals) {
+    const b = chainDepthBucket(d.chainLen);
+    if (b) counts.set(b, (counts.get(b) ?? 0) + 1);
+  }
+  return CHAIN_DEPTH_BUCKETS.map((label) => ({ label, count: counts.get(label) ?? 0 }));
+}
+
+/* ---------------------------------------------------------- poll status */
+
+export type PollStatus = { text: string; tone: 'ok' | 'warn'; title: string };
+
+/**
+ * The header's freshness pill (H6): "Updated 12 s ago" from the last
+ * successful poll, or a warn line while the latest poll failed. Before the
+ * first client tick (`lastOkAt` null) it says nothing it cannot back up.
+ */
+export function pollStatus(lastOkAt: number | null, now: number, lastError: boolean): PollStatus {
+  const exact = lastOkAt != null ? new Date(lastOkAt).toLocaleString('en-US') : null;
+  if (lastError) {
+    return {
+      text: 'Last update failed · retrying',
+      tone: 'warn',
+      title: exact ? `Last successful update ${exact}. Retrying every 30 s.` : 'No successful update yet. Retrying every 30 s.',
+    };
+  }
+  if (lastOkAt == null) return { text: 'Updating…', tone: 'ok', title: 'Waiting for the first update' };
+  const s = Math.max(0, Math.round((now - lastOkAt) / 1000));
+  const age = s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min` : `${Math.floor(s / 3600)} h`;
+  return { text: `Updated ${age} ago`, tone: 'ok', title: `Last update ${exact}. Refreshes every 30 s.` };
+}
+
+/* ---------------------------------------------------------- send activity */
+
+export type SendRange = '24h' | '7d' | '30d' | 'all';
+
+/**
+ * The Send activity strip's ranges (S02 FR-B4). `all` spans back to the
+ * oldest recorded event, so a quiet month still shows its history instead
+ * of an empty track (spanMs null = computed from the events).
+ */
+export const SEND_RANGES: Record<SendRange, { label: string; long: string; ago: string; spanMs: number | null }> = {
+  '24h': { label: '24 h', long: 'last 24 hours', ago: '24 h ago', spanMs: 24 * 3600_000 },
+  '7d': { label: '7 d', long: 'last 7 days', ago: '7 d ago', spanMs: 7 * 24 * 3600_000 },
+  '30d': { label: '30 d', long: 'last 30 days', ago: '30 d ago', spanMs: 30 * 24 * 3600_000 },
+  all: { label: 'All', long: 'everything recorded', ago: '', spanMs: null },
 };
 
-/** Notion edits per day over the window, quiet days kept so the step line
- *  has real steps. Newest day last. */
-export function activitySeries(deals: BrandDeal[], now: Date, days = 30): Array<{ label: string; count: number }> {
-  const end = utcDay(now.getTime());
-  const stamps = deals.map((d) => Date.parse(d.lastEdited)).filter((t) => !Number.isNaN(t)).map(utcDay);
-  const out: Array<{ label: string; count: number }> = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const t = end - i * DAY;
-    out.push({ label: label(t), count: stamps.filter((s) => s === t).length });
+/** The smallest range that holds at least one event (CE rangeFor rule); `all` when none of the fixed ones do. */
+export function sendRangeFor(events: readonly { at: string }[], now: number): SendRange {
+  const ages = events.map((e) => now - Date.parse(e.at)).filter((a) => Number.isFinite(a));
+  if (ages.length === 0) return '24h';
+  for (const k of ['24h', '7d', '30d'] as const) {
+    if (ages.some((a) => a <= (SEND_RANGES[k].spanMs as number))) return k;
   }
-  return out;
+  return 'all';
 }
 
-const SIZE_BUCKETS: Array<{ label: string; test: (usd: number) => boolean }> = [
-  { label: '<1k', test: (n) => n < 1000 },
-  { label: '1-3k', test: (n) => n >= 1000 && n < 3000 },
-  { label: '3-5k', test: (n) => n >= 3000 && n < 5000 },
-  { label: '5-10k', test: (n) => n >= 5000 && n < 10_000 },
-  { label: '10k+', test: (n) => n >= 10_000 },
-];
-
-/** Deal-size distribution for the dot matrix; unpriced deals are not sized. */
-export function sizeMatrix(deals: BrandDeal[]): Array<{ label: string; count: number }> {
-  const priced = deals.map(dealUsd).filter((n) => n > 0);
-  return SIZE_BUCKETS.map((b) => ({ label: b.label, count: priced.filter(b.test).length }));
-}
-
-/** What needs the operator this week: follow-ups due (overdue included) and
- *  deadlines inside the window, on open deals only, soonest first. */
-export function dueSoon(deals: BrandDeal[], now: Date, days = 7): { followUps: BrandDeal[]; deadlines: BrandDeal[] } {
-  const limit = now.getTime() + days * DAY;
-  const due = (iso: string | null) => iso !== null && !Number.isNaN(Date.parse(iso)) && Date.parse(iso) <= limit;
-  const byDate = (key: 'followUpDate' | 'deadline') => (a: BrandDeal, b: BrandDeal) => Date.parse(a[key]!) - Date.parse(b[key]!);
-  const open = deals.filter(isOpen);
-  return {
-    followUps: open.filter((d) => due(d.followUpDate)).sort(byDate('followUpDate')),
-    deadlines: open.filter((d) => due(d.deadline)).sort(byDate('deadline')),
-  };
-}
-
-export function timeAgo(iso: string | null, now: Date = new Date()): string {
-  if (!iso) return '';
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return '';
-  const mins = Math.max(0, Math.round((now.getTime() - then) / 60_000));
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 48) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
-
-export function fmtUsd(n: number): string {
-  return `$${Math.round(n).toLocaleString('en-US')}`;
+/** The span (ms) the strip draws for a range: fixed, or back to the oldest event (+4% so it clears the gutter). */
+export function sendSpanMs(range: SendRange, events: readonly { at: string }[], now: number): number {
+  const fixed = SEND_RANGES[range].spanMs;
+  if (fixed !== null) return fixed;
+  const oldest = Math.min(now, ...events.map((e) => Date.parse(e.at)).filter((t) => Number.isFinite(t)));
+  return Math.max(SEND_RANGES['24h'].spanMs as number, (now - oldest) * 1.04);
 }

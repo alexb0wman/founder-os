@@ -1,48 +1,71 @@
 import { NextResponse } from 'next/server';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
-import { getBrainProvider } from '@/lib/brain';
 import { getDb } from '@/lib/data';
-import { performInterject } from '@/lib/interject';
-import { createMemoryProvider, type MemoryBrain } from '@/lib/memory-provider';
-import { createPaperclipIssue } from '@/lib/connectors/paperclip';
+import { realAgents } from '@/lib/agents/real';
+import { ingestBrainDump } from '@/lib/brain-dump';
+import { createGBrainProvider, type CaptureInput } from '@/lib/connectors/gbrain';
+import { INTERJECT_UNDO_MS, routeInterject } from '@/lib/interject';
+import { taskHref } from '@/lib/home-today';
 
 export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs'; // better-sqlite3 is native — keep off the edge runtime
+export const runtime = 'nodejs';
 
-const InterjectSchema = z.object({
-  text: z.string().trim().min(1).max(10_000),
-  route: z.enum(['task', 'agent', 'note']).optional(),
-});
+const Body = z.object({ text: z.string().min(1).max(8000) });
+const Undo = z.object({ id: z.string().min(1) });
 
-/** The home composer: free text → board task / agent relay / G-Brain note. */
+/**
+ * Home's interject composer (pages/feature-additions.md F2). Rule-based, no
+ * LLM (lib/interject.ts): a task, an agent relay (a task assigned to that
+ * agent) or a note (written to the brain inbox, embedded when Optimal Engine is
+ * up). Answers `{ kind, id, href }`.
+ */
 export async function POST(req: Request) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 });
-  }
-  const parsed = InterjectSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ ok: false, error: parsed.error.issues }, { status: 400 });
+  const parsed = Body.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'text is required' }, { status: 400 });
+  const route = routeInterject(parsed.data.text, realAgents.map((a) => ({ id: a.id, name: a.name })));
+  if (!route) return NextResponse.json({ error: 'nothing to add' }, { status: 400 });
+
+  if (route.kind === 'note') {
+    try {
+      const result = await ingestBrainDump(
+        { text: route.text, folder: 'inbox', tags: ['interject'] },
+        { capture: process.env.BRAIN_PROVIDER === 'stub' ? undefined : (input: CaptureInput) => createGBrainProvider().capture(input) },
+      );
+      return NextResponse.json({ ok: true, kind: 'note', id: result.relPath, href: '/brain', embedded: result.embedded, undo: false }, { status: 201 });
+    } catch (err) {
+      return NextResponse.json({ error: `note not saved: ${err instanceof Error ? err.message : String(err)}` }, { status: 500 });
+    }
   }
 
-  const receipt = await performInterject(parsed.data.text, parsed.data.route, {
-    async createTask(title, description) {
-      const issue = await createPaperclipIssue({ title, description });
-      // PaperclipIssue carries no url; the board UI lives at the API origin.
-      const base = process.env.PAPERCLIP_API_URL?.replace(/\/$/, '');
-      const url = issue && base ? `${base}/issues/${issue.id}` : null;
-      return { ref: issue?.identifier ?? null, url };
-    },
-    async captureNote(input) {
-      const brain: MemoryBrain = getBrainProvider();
-      const outcome = await createMemoryProvider({ db: getDb(), brain }).remember(input);
-      return outcome.ok ? { ok: true, slug: outcome.slug } : { ok: false, error: outcome.error };
-    },
+  const now = new Date().toISOString();
+  const id = randomUUID();
+  getDb().agentTasks.insert({
+    id,
+    agentId: route.kind === 'relay' ? route.agentId : null,
+    title: route.title,
+    status: 'open',
+    createdAt: now,
+    updatedAt: now,
+    detail: route.detail,
+    ownerKind: route.kind === 'relay' ? 'agent' : 'me',
   });
+  return NextResponse.json(
+    { ok: true, kind: route.kind, id, href: taskHref(id), ...(route.kind === 'relay' ? { agentId: route.agentId } : {}), undo: true },
+    { status: 201 },
+  );
+}
 
-  // A landed interject is a 200; one that could not land anywhere is a 502 so
-  // the composer can show the failure instead of a fake receipt.
-  return NextResponse.json(receipt, { status: receipt.ok ? 200 : 502 });
+/** Undo (H-4): removes a task this composer created, within the toast's window. */
+export async function DELETE(req: Request) {
+  const parsed = Undo.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'id is required' }, { status: 400 });
+  const tasks = getDb().agentTasks;
+  const task = tasks.get(parsed.data.id);
+  if (!task) return NextResponse.json({ error: 'unknown task' }, { status: 404 });
+  if (Date.now() - Date.parse(task.createdAt) > INTERJECT_UNDO_MS + 5_000) {
+    return NextResponse.json({ error: 'too late to undo; delete it from Tasks' }, { status: 409 });
+  }
+  tasks.remove(task.id);
+  return NextResponse.json({ ok: true, id: task.id });
 }

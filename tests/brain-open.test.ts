@@ -37,7 +37,7 @@ describe('theme token completeness', () => {
     const varsIn = (body: string) => new Set([...body.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
 
     const universal = new Set<string>();
-    const perTheme: Record<string, Set<string>> = { dark: new Set(), light: new Set(), midnight: new Set(), ember: new Set(), mono: new Set() };
+    const perTheme: Record<string, Set<string>> = { console: new Set() };
 
     for (const [, selector, body] of blocks) {
       const names = varsIn(body);

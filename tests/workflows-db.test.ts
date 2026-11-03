@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import type { Workflow } from '@/lib/schemas';
 
-let db: FounderDb;
+let db: GladosDb;
 
 afterEach(() => {
   db?.close();

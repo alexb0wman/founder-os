@@ -1,33 +1,43 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { getDb } from '@/lib/data';
-import { TradingAccountSnapshotSchema, TradingPositionSchema } from '@/lib/schemas';
+import { authorizePush } from '@/lib/push-auth';
+import { TradingPushSchema } from '@/lib/schemas';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
-/** Agent-fed ingest: the trading agent pushes the current account snapshot plus
- *  its positions here behind the application auth boundary. Positions are
- *  capped so one payload can't balloon the DB. */
-const BodySchema = z.object({
-  snapshot: TradingAccountSnapshotSchema,
-  positions: z.array(TradingPositionSchema).max(200).default([]),
-});
-
+/**
+ * The Markets agent's push (pages/trading.md §2): one account snapshot plus
+ * its positions (at most 200), and optionally its open orders (replaced
+ * wholesale), trade log rows and the run's analysis. Authenticated by
+ * `Authorization: Bearer <TRADING_PUSH_TOKEN>` or the operator session
+ * (lib/push-auth.ts). Validated whole before anything is written: a bad body
+ * is a 400 and writes nothing (T-2).
+ */
 export async function POST(req: Request) {
-  let body: unknown;
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 });
-  }
-  const parsed = BodySchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ ok: false, error: parsed.error.issues }, { status: 400 });
-  }
-  const db = getDb();
-  db.trading.recordSnapshot(parsed.data.snapshot, parsed.data.positions);
-  // The first real push retires the demo: seeded rows would otherwise sit in
-  // front of the live series and draw a fake cliff on the sleeve graph.
-  const evicted = parsed.data.snapshot.source === 'seed' ? null : db.trading.evictSeeded();
-  return NextResponse.json({ ok: true, positions: parsed.data.positions.length, evicted });
+  const auth = authorizePush(req, 'TRADING_PUSH_TOKEN');
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
+  const parsed = TradingPushSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'invalid push', issues: parsed.error.flatten() }, { status: 400 });
+  const { snapshot, positions, openOrders, activity, analysis } = parsed.data;
+  const { accountId, capturedAt } = snapshot;
+
+  const t = getDb().trading;
+  // Every row inherits the snapshot's account, so a push can never write into another account.
+  t.recordSnapshot(snapshot, positions.map((p) => ({ ...p, accountId, capturedAt })));
+  if (openOrders) t.replaceOpenOrders(accountId, openOrders.map((o) => ({ ...o, accountId })));
+  for (const a of activity) t.recordActivity({ ...a, accountId });
+  if (analysis) t.recordAnalysis({ ...analysis, accountId });
+
+  return NextResponse.json({
+    ok: true,
+    via: auth.via,
+    accountId,
+    capturedAt,
+    positions: positions.length,
+    openOrders: openOrders?.length ?? null,
+    activity: activity.length,
+    analysis: Boolean(analysis),
+  });
 }

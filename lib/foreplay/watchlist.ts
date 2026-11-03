@@ -3,7 +3,7 @@ import type { ForeplayClient } from '@/lib/foreplay/client';
 import { adStore } from '@/lib/foreplay/store';
 
 /**
- * The local watchlist: Adscout's own curated brand list, independent of
+ * The local watchlist — Adscout's own curated brand list, independent of
  * Foreplay's Spyder (whose tracking can only be edited inside their app).
  * Brands are added by domain (resolved through the API once) or directly by
  * brand id from a mine result, and monitored via the public brand endpoints,
@@ -39,7 +39,7 @@ export function removeWatchEntry(brandId: string): WatchEntry[] {
   return next;
 }
 
-/** Add by brand id (already known, e.g. from a mine result): no API call. */
+/** Add by brand id (already known, e.g. from a mine result) — no API call. */
 export function addWatchEntry(entry: Omit<WatchEntry, 'addedAt'>): WatchEntry[] {
   const list = readWatchEntries();
   if (list.some((e) => e.id === entry.id)) return list;
@@ -48,7 +48,7 @@ export function addWatchEntry(entry: Omit<WatchEntry, 'addedAt'>): WatchEntry[] 
   return next;
 }
 
-/** Add by domain: resolves to the biggest brand profile via one API call. */
+/** Add by domain — resolves to the biggest brand profile via one API call. */
 export async function addWatchDomain(client: ForeplayClient, domain: string): Promise<WatchEntry | null> {
   const clean = domain
     .trim()

@@ -1,6 +1,6 @@
 /**
- * GoHighLevel provider — the Launchpad Cohort pipeline
- * (alex@launchpadcohort.example.com sub-account) mapped into the same
+ * GoHighLevel provider — the Workshop pipeline
+ * (owner@example.com sub-account) mapped into the same
  * FunnelJourney shape as Attio, so both CRMs share one space. Auth is a
  * Private Integration Token (Settings → Private Integrations, read scopes):
  * set GHL_API_KEY + GHL_LOCATION_ID in .env.local. Honest null when unkeyed
@@ -11,7 +11,9 @@
  * a `won` opportunity is the conversion regardless of stage.
  */
 import { resolveCred, CRED_FILES } from '@/lib/creds';
+import { TTL, keyTag, swr } from '@/lib/swr';
 import { FUNNEL_STAGES } from '@/lib/funnel';
+import { funnelProviderName } from '@/lib/stores';
 import { FunnelJourneySchema, type FunnelJourney, type FunnelStage, type FunnelTouch } from '@/lib/schemas';
 
 export type GhlPipeline = {
@@ -122,7 +124,7 @@ export function mapGhlOpportunities(
         FunnelJourneySchema.parse({
           id,
           name: o.contact?.name || o.name || 'Unnamed opportunity',
-          venture: 'launchpad-cohort', // GHL is the LC machine
+          venture: 'default', // GHL runs the offer funnel
           status: canonical,
           product: won ? `GHL: ${stage.name}` : null,
           amountUsd: value > 0 ? value : won ? 0 : null,
@@ -155,32 +157,41 @@ export function mapGhlOpportunities(
 export async function ghlFunnelJourneys(
   now = new Date(),
 ): Promise<{ journeys: FunnelJourney[]; excluded: number; total: number } | null> {
-  if ((process.env.FUNNEL_PROVIDER ?? 'attio') !== 'attio') return null; // seed-pinned (tests)
-  const key = resolveCred('GHL_API_KEY', [CRED_FILES.brainAgent]);
-  const locationId = resolveCred('GHL_LOCATION_ID', [CRED_FILES.brainAgent]);
+  if (funnelProviderName() !== 'attio') return null; // seed-pinned (tests)
+  const key = resolveCred('GHL_API_KEY', [CRED_FILES.agentsEnv]);
+  const locationId = resolveCred('GHL_LOCATION_ID', [CRED_FILES.agentsEnv]);
   if (!key || !locationId) return null;
-  const headers = { Authorization: `Bearer ${key}`, Version: GHL_VERSION, Accept: 'application/json' };
   try {
-    const pipeRes = await fetch(`${GHL_BASE}/opportunities/pipelines?locationId=${locationId}`, {
-      headers,
-      cache: 'no-store',
-    });
-    if (!pipeRes.ok) return null;
-    const pipelines = ((await pipeRes.json()) as { pipelines?: GhlPipeline[] }).pipelines ?? [];
-
-    const opportunities: GhlOpportunity[] = [];
-    for (let page = 1; page <= 10; page++) {
-      const res = await fetch(
-        `${GHL_BASE}/opportunities/search?location_id=${locationId}&limit=100&page=${page}`,
-        { headers, cache: 'no-store' },
-      );
-      if (!res.ok) return null;
-      const batch = ((await res.json()) as { opportunities?: GhlOpportunity[] }).opportunities ?? [];
-      opportunities.push(...batch);
-      if (batch.length < 100) break;
-    }
+    // Same window as Attio (lib/swr.ts): the raw pull is reused for 60s, served stale up to 10 min
+    // while one refresh runs, and mapped fresh on every call. A failed pull is never stored.
+    const { pipelines, opportunities } = await swr(`ghl:funnel:${keyTag(`${key}:${locationId}`)}`, TTL.crm, () =>
+      pullGhlPipeline(key, locationId),
+    );
     return mapGhlOpportunities(pipelines, opportunities, now, locationId);
   } catch {
     return null;
   }
+}
+
+async function pullGhlPipeline(key: string, locationId: string): Promise<{ pipelines: GhlPipeline[]; opportunities: GhlOpportunity[] }> {
+  const headers = { Authorization: `Bearer ${key}`, Version: GHL_VERSION, Accept: 'application/json' };
+  const pipeRes = await fetch(`${GHL_BASE}/opportunities/pipelines?locationId=${locationId}`, {
+    headers,
+    cache: 'no-store',
+  });
+  if (!pipeRes.ok) throw new Error(`GHL HTTP ${pipeRes.status}`);
+  const pipelines = ((await pipeRes.json()) as { pipelines?: GhlPipeline[] }).pipelines ?? [];
+
+  const opportunities: GhlOpportunity[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const res = await fetch(
+      `${GHL_BASE}/opportunities/search?location_id=${locationId}&limit=100&page=${page}`,
+      { headers, cache: 'no-store' },
+    );
+    if (!res.ok) throw new Error(`GHL HTTP ${res.status}`);
+    const batch = ((await res.json()) as { opportunities?: GhlOpportunity[] }).opportunities ?? [];
+    opportunities.push(...batch);
+    if (batch.length < 100) break;
+  }
+  return { pipelines, opportunities };
 }

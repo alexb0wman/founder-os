@@ -1,26 +1,28 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { sendSlackMessage } from '@/lib/connectors/slack';
-import { sendEmailReply, invalidateEmailCache } from '@/lib/connectors/email';
+import { sendEmailReply } from '@/lib/connectors/email';
+import { sendWhatsAppMessage } from '@/lib/connectors/whatsapp-send';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Replies the server can actually deliver. Slack sends via the bot token; email
- * sends for real over SMTP using the originating inbox's credentials. WhatsApp
- * stays a client-side deep link (the local store is read-only). A non-ok result
- * is honest (502) so the UI can fall back to a mailto: draft.
+ * Replies the server can actually deliver. Slack sends via the bot token.
+ * Email NEVER sends directly — it becomes a QUEUE-gated Gmail draft on
+ * the verified sender via the send daemon (see sendEmailReply); a human approves before
+ * anything leaves. WhatsApp stays a client-side deep link (the local store is
+ * read-only). A non-ok result is honest (502) so the UI can fall back to a
+ * mailto: draft.
  */
 const ReplySchema = z.discriminatedUnion('source', [
   z.object({ source: z.literal('slack'), channel: z.string().min(1), text: z.string().min(1).max(4000) }),
+  z.object({ source: z.literal('whatsapp'), jid: z.string().min(1), text: z.string().min(1).max(4000) }),
   z.object({
     source: z.literal('email'),
     account: z.string().optional(),
     to: z.string().email(),
     subject: z.string().max(300).optional(),
     text: z.string().min(1).max(20000),
-    inReplyTo: z.string().min(1).max(998).optional(),
-    references: z.array(z.string().min(1).max(998)).max(100).optional(),
   }),
 ]);
 
@@ -35,15 +37,16 @@ export async function POST(request: Request) {
     return NextResponse.json(result, { status: result.ok ? 200 : 502 });
   }
 
+  if (parsed.data.source === 'whatsapp') {
+    const result = await sendWhatsAppMessage(parsed.data.jid, parsed.data.text);
+    return NextResponse.json(result, { status: result.ok ? 200 : 502 });
+  }
+
   const result = await sendEmailReply({
     accountId: parsed.data.account,
     to: parsed.data.to,
     subject: parsed.data.subject ?? '(no subject)',
     text: parsed.data.text,
-    inReplyTo: parsed.data.inReplyTo,
-    references: parsed.data.references,
   });
-  // A sent reply must not sit behind the comms cache window.
-  if (result.ok) invalidateEmailCache();
   return NextResponse.json(result, { status: result.ok ? 200 : 502 });
 }

@@ -1,90 +1,69 @@
-import { describe, expect, test } from 'vitest';
-import { LIFE_AREAS } from '@/lib/life-map';
-import {
-  VENTURES,
-  ventureAgentSet,
-  venturesForAgent,
-  getVenture,
-} from '@/lib/ventures';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { lifeAreaById } from '@/lib/ventures';
+import { getVenture, readVentures, ventureAgentSet, venturesForAgent, ventureAreaAgents } from '@/lib/ventures-store';
 
-import { realAgents } from '@/lib/agents/real';
+// Ventures are data: a fresh install has none; the operator's live in
+// ventures.json in the data directory.
+let dir: string;
+const saved = process.env.GLADOS_DATA_DIR;
 
-const KNOWN_AGENTS = new Set(realAgents.map((a) => a.id));
+beforeEach(() => {
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'glados-ventures-'));
+  process.env.GLADOS_DATA_DIR = dir;
+});
+afterEach(() => {
+  if (saved === undefined) delete process.env.GLADOS_DATA_DIR;
+  else process.env.GLADOS_DATA_DIR = saved;
+  fs.rmSync(dir, { recursive: true, force: true });
+});
 
-describe('VENTURES', () => {
-  test('the two active income sources, each with a distinct color and brain tag', () => {
-    expect(VENTURES.map((v) => v.id)).toEqual(['vantage', 'launchpad-cohort']);
-    expect(new Set(VENTURES.map((v) => v.color)).size).toBe(2);
-    expect(new Set(VENTURES.map((v) => v.brainTag)).size).toBe(2);
-    for (const v of VENTURES) {
-      expect(v.focus.length).toBeGreaterThan(0); // executive task list
-      expect(v.detail.length).toBeGreaterThan(0);
-    }
+const acme = {
+  id: 'acme',
+  label: 'Acme',
+  kind: 'Agency',
+  color: '#89cff0',
+  detail: 'An example business.',
+  brainTag: 'acme',
+  focus: ['Ship the offer'],
+  areaAgents: { clients: ['sales-agent', 'crm-pulse'], ops: ['conductor'] },
+};
+
+describe('a fresh install', () => {
+  test('ships no ventures, and every lookup is empty', () => {
+    expect(readVentures()).toEqual([]);
+    expect(getVenture('anything')).toBeNull();
+    expect(ventureAgentSet('anything').size).toBe(0);
+    expect(venturesForAgent('conductor')).toEqual([]);
+    expect(ventureAreaAgents('anything', 'clients')).toEqual([]);
   });
 
-  test('venture colors match each real brand source', () => {
-    const byId = new Map(VENTURES.map((v) => [v.id, v]));
-    // Vantage — sampled from VANTAGE LOGO (spring green)
-    expect(byId.get('vantage')?.color).toBe('#00ffaa');
-    // Launchpad Cohort — hsl(355 70% 50%) from the live site theme + brand guide
-    expect(byId.get('launchpad-cohort')?.color).toBe('#d9263f');
-  });
-
-  test('Personal Brand (brand-deals) is retired from the venture lens', () => {
-    expect(getVenture('brand-deals')).toBeNull();
-    expect(VENTURES.some((v) => v.label === 'Personal Brand')).toBe(false);
-  });
-
-  test('venture colors do not collide with life-area colors', () => {
-    const areaColors = new Set(LIFE_AREAS.map((a) => a.color));
-    for (const v of VENTURES) expect(areaColors.has(v.color)).toBe(false);
-  });
-
-  test('every areaAgents key is a real life area; every agent id is real', () => {
-    const areaIds = new Set(LIFE_AREAS.map((a) => a.id));
-    for (const v of VENTURES) {
-      for (const [areaId, agents] of Object.entries(v.areaAgents)) {
-        expect(areaIds.has(areaId), `unknown area ${areaId} in ${v.id}`).toBe(true);
-        for (const id of agents) {
-          expect(KNOWN_AGENTS.has(id), `unknown agent ${id} in ${v.id}/${areaId}`).toBe(true);
-        }
-      }
-    }
-  });
-
-  test('every venture staffs marketing, communication, and finances at minimum', () => {
-    for (const v of VENTURES) {
-      for (const required of ['marketing', 'communication', 'finances']) {
-        expect(
-          (v.areaAgents[required] ?? []).length,
-          `${v.id} has no agents on ${required}`,
-        ).toBeGreaterThan(0);
-      }
-    }
+  test('a malformed file reads as no ventures', () => {
+    fs.writeFileSync(path.join(dir, 'ventures.json'), '{"oops": true}');
+    expect(readVentures()).toEqual([]);
   });
 });
 
-describe('lookups', () => {
-  test('getVenture resolves by id and returns null for unknowns', () => {
-    expect(getVenture('vantage')?.label).toBe('Vantage');
-    expect(getVenture('nope')).toBeNull();
+describe('ventures.json', () => {
+  beforeEach(() => fs.writeFileSync(path.join(dir, 'ventures.json'), JSON.stringify([acme])));
+
+  test('is read from the data directory', () => {
+    expect(readVentures().map((v) => v.id)).toEqual(['acme']);
+    expect(getVenture('acme')?.label).toBe('Acme');
   });
 
-  test('ventureAgentSet unions all areas for a venture', () => {
-    const set = ventureAgentSet('vantage');
-    const vantage = getVenture('vantage')!;
-    for (const agents of Object.values(vantage.areaAgents)) {
-      for (const id of agents) expect(set.has(id)).toBe(true);
-    }
+  test('agents resolve across every life area', () => {
+    expect([...ventureAgentSet('acme')].sort()).toEqual(['conductor', 'crm-pulse', 'sales-agent']);
+    expect(venturesForAgent('crm-pulse').map((v) => v.id)).toEqual(['acme']);
+    expect(venturesForAgent('nobody')).toEqual([]);
+    expect(ventureAreaAgents('acme', 'clients')).toEqual(['sales-agent', 'crm-pulse']);
   });
+});
 
-  test('venturesForAgent reverse lookup: shared infra agents serve both ventures', () => {
-    expect(venturesForAgent('conductor').map((v) => v.id)).toEqual([
-      'vantage', 'launchpad-cohort',
-    ]);
-  });
-
-  test('whatsapp-worker serves launchpad-cohort (students live on WhatsApp)', () => {
-    expect(venturesForAgent('whatsapp-worker').some((v) => v.id === 'launchpad-cohort')).toBe(true);
+describe('lifeAreaById', () => {
+  test('returns null for an unknown area', () => {
+    expect(lifeAreaById('nope')).toBeNull();
   });
 });

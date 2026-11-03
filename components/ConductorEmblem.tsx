@@ -1,11 +1,12 @@
 import { SparkIcon } from '@/components/SparkIcon';
+import { WizardIcon } from '@/lib/nav';
 
 /**
- * The Conductor's living core — the super-agent's mark on every surface it
+ * The Wizard's living core — the super-agent's mark on every surface it
  * appears (the right-edge dock, the /agents chat, the /org "AI Head" card).
  *
  * Replaces the old hard-bordered square chip with a round core wrapped in a
- * hairline ring that echoes the BrainViz signature: the Conductor IS the org's
+ * hairline ring that echoes the BrainViz signature: the Wizard IS the org's
  * brain. Idle it stays quiet (the Monolith rule — machinery, not mascots).
  * While an agent is being chatted with (`thinking`) it comes alive: an accent
  * arc orbits the ring, the core breathes, and a heartbeat halo pulses outward.
@@ -25,18 +26,22 @@ export function ConductorEmblem({
   size = 32,
   shade = 'var(--text)',
   thinking = false,
+  glyph = 'core',
   className = '',
 }: {
   /** Full footprint of the core + ring, in px. */
   size?: number;
-  /** Tint of the Vantage silhouette. */
+  /** Tint of the Acme silhouette. */
   shade?: string;
   /** True while an agent is being chatted with — turns the motion on. */
   thinking?: boolean;
+  /** The centre mark: the shared agent core (default), or the Wizard's own
+   *  wand so the open dock matches its launcher (S08 Q-SH-1, dock header only). */
+  glyph?: 'core' | 'wand';
   className?: string;
 }) {
   // the silhouette sits at ~56% of the core so the ring + disc frame it
-  const glyph = Math.round(size * 0.56);
+  const glyphSize = Math.round(size * 0.56);
   return (
     <span
       className={conductorEmblemClasses(thinking, className)}
@@ -47,7 +52,11 @@ export function ConductorEmblem({
       <span className="conductor-sweep" aria-hidden />
       <span className="conductor-ring" aria-hidden />
       <span className="conductor-core">
-        <SparkIcon size={glyph} shade={shade} />
+        {glyph === 'wand' ? (
+          <WizardIcon aria-hidden width={glyphSize} height={glyphSize} strokeWidth={1.5} style={{ color: shade }} />
+        ) : (
+          <SparkIcon size={glyphSize} shade={shade} />
+        )}
       </span>
     </span>
   );

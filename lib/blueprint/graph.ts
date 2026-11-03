@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * The Blueprint graph: the system, drawn from itself. Nothing here is
+ * The Blueprint graph — the system, drawn from itself. Nothing here is
  * hand-authored: lib/blueprint/compile.ts assembles this shape from the
  * real registries (agents, connectors, skills, stores, daemons, hosts) at
  * request time, which is why the map updates itself when the system does.
@@ -18,7 +18,7 @@ export const NODE_KINDS = [
   'skillpack',
   'store', // durable data (queue, pipelines, ad-intel, brain, db)
   'daemon', // scheduled/background processes
-  'host', // laptop, deployment host
+  'host', // MacBook, mini
   'surface', // a page of the OS
   'router', // a diamond node where a real routing rule lives (identity, deals)
 ] as const;
@@ -27,8 +27,8 @@ export type NodeKind = z.infer<typeof NodeKindSchema>;
 
 /** Honest lifecycle: live (wired + working), configured (wired, needs a
  *  key/host that is present but unverified), not-configured (wired in code,
- *  missing its credential/host), designed (specified but not wired:
- *  intentionally ghosted nodes). */
+ *  missing its credential/host), designed (specified but not wired — the
+ *  ghosted nodes the operator asked for). */
 export const NodeStatusSchema = z.enum(['live', 'configured', 'not-configured', 'designed']);
 export type NodeStatus = z.infer<typeof NodeStatusSchema>;
 
@@ -44,7 +44,7 @@ export const BlueprintNodeSchema = z.object({
   blurb: z.string().default(''),
   /** Structured facts for the inspector: model, tools, paths, hosts… */
   facts: z.record(z.string(), z.string()).default({}),
-  /** Icon name in the Lucide language: the canvas maps it. */
+  /** Icon name in the Lucide language — the canvas maps it. */
   icon: z.string().default('box'),
 });
 export type BlueprintNode = z.infer<typeof BlueprintNodeSchema>;
@@ -77,7 +77,7 @@ export const BlueprintGraphSchema = z.object({
 });
 export type BlueprintGraph = z.infer<typeof BlueprintGraphSchema>;
 
-/** Every edge endpoint must exist: the compiler's own honesty check. */
+/** Every edge endpoint must exist — the compiler's own honesty check. */
 export function validateGraph(graph: BlueprintGraph): string[] {
   const ids = new Set(graph.nodes.map((n) => n.id));
   const problems: string[] = [];

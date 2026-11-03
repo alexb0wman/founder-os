@@ -16,8 +16,7 @@ export const dynamic = 'force-dynamic';
 
 const ConnectBody = z.object({
   slug: z.string().min(1),
-  // 4096 matches the admin key endpoint; a base64 RSA private key is ~2.2KB.
-  values: z.record(z.string(), z.string().min(1).max(4096)),
+  values: z.record(z.string(), z.string().min(1).max(600)),
 });
 
 const DisconnectBody = z.object({ slug: z.string().min(1) });

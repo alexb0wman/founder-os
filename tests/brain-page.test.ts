@@ -5,30 +5,86 @@ import { describe, expect, test } from 'vitest';
 const read = (p: string) => readFileSync(join(process.cwd(), p), 'utf8');
 
 /**
- * /brain layout contract (the operator, 2026-07-12): the capture box is ONE
- * compact untitled part riding the right of the G-BRAIN header — text or
- * dropped documents — and the knowledge graph sits directly under the title.
+ * /brain layout contract. The Example-6 radial is the hero directly under the
+ * title, with the knowledge graph as the next section.
+ *
+ * Capture moved OFF the header on 2026-08-26 . It now floats over the canvas as BrainDock,
+ * which owns the open/collapsed states; the header carries nothing.
  */
 describe('/brain header capture + graph placement', () => {
-  test('the compact dump rides the header right slot; no standalone dump section', () => {
+  test('capture floats over the canvas as the dock, not in the header slot', () => {
     const page = read('app/brain/page.tsx');
-    expect(page).toMatch(/right=\{<BrainDump compact \/>\}/);
-    expect(page).not.toMatch(/<section[^>]*>\s*<BrainDump \/>/);
+    expect(page).toMatch(/<BrainDock \/>/);
+    // the header is bare — capture is no longer parked in its right slot
+    expect(page).not.toMatch(/right=\{<BrainDump/);
+    // and the dock lives INSIDE the radial section so it overlays the graph
+    const sectionStart = page.indexOf('<section', page.indexOf('<PageHeader'));
+    const sectionEnd = page.indexOf('</section>', sectionStart);
+    expect(page.indexOf('<BrainDock />')).toBeGreaterThan(sectionStart);
+    expect(page.indexOf('<BrainDock />')).toBeLessThan(sectionEnd);
   });
 
-  test('the tab is the graph alone: it fills the view, health readouts moved to /doctor', () => {
+  test('retrieval notices render above the canvas, at title height, without pushing it', () => {
+    const page = read('app/brain/page.tsx');
+    // the landing slot lives in the header, level with the G-Brain title
+    expect(page).toMatch(/id="gbrain-notice-slot"/);
+    // h-0 is load-bearing: a slot with real height grows the header, which
+    // pushes the canvas down and drops the capture card off the fold. Assert
+    // the two classes that carry meaning, not their order — the slot also
+    // needs a z-index, and requiring `relative h-0` adjacent broke the moment
+    // z-40 landed between them.
+    expect(page).toMatch(/id="gbrain-notice-slot"[^>]*className="[^"]*\brelative\b/);
+    expect(page).toMatch(/id="gbrain-notice-slot"[^>]*className="[^"]*\bh-0\b/);
+
+    const radial = read('components/GBrainRadial.tsx');
+    // the radial portals its notice up into that slot rather than drawing it
+    // inside its own frame
+    expect(radial).toMatch(/createPortal\(/);
+    expect(radial).toMatch(/gbrain-notice-slot/);
+  });
+
+  test('the bottom middle belongs to capture, not to the ask bar', () => {
+    const radial = read('components/GBrainRadial.tsx');
+    // the ask bar moved to the top-left of the frame
+    expect(radial).not.toMatch(/ask bar[\s\S]{0,200}bottom-\[56px\][^\n]*left-1\/2/);
+    const dock = read('components/BrainDock.tsx');
+    // both dock states are anchored to the bottom centre
+    expect(dock).toMatch(/bd-line[^"]*absolute bottom-\[52px\] left-1\/2/);
+    expect(dock).toMatch(/bd-card absolute bottom-\[46px\] left-1\/2/);
+    // and the card grows upward out of the line rather than floating mid-canvas
+    expect(dock).toMatch(/transformOrigin: 'bottom center'/);
+    expect(dock).not.toMatch(/top-1\/2/);
+  });
+
+  test('the dock folds down instead of discarding a half-typed note', () => {
+    const dock = read('components/BrainDock.tsx');
+    // BrainDump is rendered unconditionally — hiding it, never unmounting it,
+    // is what keeps a draft alive across a collapse
+    expect(dock).toMatch(/<BrainDump compact \/>/);
+    expect(dock).not.toMatch(/open &&\s*<BrainDump/);
+  });
+
+  test('the dock is hover-driven, with no idle timer to shrink it mid-use', () => {
+    const dock = read('components/BrainDock.tsx');
+    // open is derived from pointing at it / using it, never from a countdown
+    expect(dock).toMatch(/const open = hover \|\| pinned \|\| focused;/);
+    expect(dock).not.toMatch(/IDLE_MS/);
+    expect(dock).not.toMatch(/setOpen\(/);
+    // hover handlers ride BOTH states, so crossing between them holds it open (in each style's tree:
+    // Classic and GladOS, glados-ui S05 F05.12)
+    expect(dock.match(/\{\.\.\.hoverProps\}/g)).toHaveLength(4);
+    // a click inside pins it — the file dialog steals the pointer otherwise
+    expect(dock).toMatch(/setPinned\(!!wrapRef\.current\?\.contains/);
+  });
+
+  test('the radial hero leads, the knowledge graph follows', () => {
     const page = read('app/brain/page.tsx');
     const header = page.indexOf('<PageHeader');
-    const graph = page.indexOf('<BrainGraphView');
-    // the graph is the sole content rendered under the header
-    expect(graph).toBeGreaterThan(header);
-    // single, no-scroll view: a viewport-height flex column with the graph filling it
-    expect(page).toMatch(/h-\[calc\(100dvh/);
-    expect(page).toMatch(/<BrainGraphView\s+fill/);
-    // every health readout moved out — none of them render on the G-Brain tab
-    for (const gone of ['PillarRadar', 'BrainCore', 'Pipeline', 'Query path', 'Storage layers']) {
-      expect(page).not.toContain(gone);
-    }
+    const firstSection = page.indexOf('<section', header);
+    // the first section on the page IS the live radial core
+    expect(page.indexOf('GBrainRadialLazy', firstSection)).toBeLessThan(page.indexOf('</section>', firstSection));
+    // and the knowledge graph is still on the page, right after
+    expect(page.indexOf('BrainGraphView')).toBeGreaterThan(page.indexOf('GBrainRadialLazy'));
   });
 
   test('BrainDump has a compact mode with document drop that reads files as text', () => {
@@ -38,21 +94,5 @@ describe('/brain header capture + graph placement', () => {
     expect(dump).toMatch(/\.text\(\)/);
     // dropped docs keep their filename as the note title
     expect(dump).toMatch(/name\.replace/);
-  });
-});
-
-/**
- * The engine's health readouts (pillar health, doctor core, storage layers,
- * pipeline, query path) moved off the graph tab onto their own /doctor view so
- * the G-Brain tab can be a single, uncluttered screen (the operator).
- */
-describe('/doctor holds the engine health readouts', () => {
-  test('pillar health, the doctor core, storage, pipeline and query path all live on /doctor', () => {
-    const page = read('app/doctor/page.tsx');
-    for (const has of ['PillarRadar', 'BrainCore', 'pillar health', 'Storage layers', 'Pipeline', 'Query path']) {
-      expect(page, `/doctor should render ${has}`).toContain(has);
-    }
-    // it is the health view, not the graph
-    expect(page).not.toContain('BrainGraphView');
   });
 });

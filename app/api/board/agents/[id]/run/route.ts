@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { invokePaperclipHeartbeat } from '@/lib/connectors/paperclip';
+import { invokePaperclipHeartbeat } from '@/founderos/lib/connectors/paperclip';
 
 export const dynamic = 'force-dynamic';
 

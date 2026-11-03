@@ -17,7 +17,7 @@ const touch = (over: Partial<FunnelTouch> = {}): FunnelTouch => ({
 const journey = (over: Partial<FunnelContact> = {}, touches: FunnelTouch[] = [touch()]): FunnelJourney => ({
   id: 'fc-test',
   name: 'Test Client',
-  venture: 'vantage',
+  venture: 'venture-a',
   status: 'engaged',
   product: null,
   amountUsd: null,
@@ -49,19 +49,6 @@ describe('ACQUISITIONS — the rim segments', () => {
       'word_of_mouth',
     ]);
     for (const a of ACQUISITIONS) expect(a.label.length).toBeGreaterThan(0);
-  });
-});
-
-describe('acquisitionFor — a Trakyo-attributed touch beats the keyword guess', () => {
-  test('the acquisition stamp wins even when the label sniffs differently', () => {
-    // content title carries no platform keyword — Trakyo knows it was YouTube
-    expect(acquisitionFor(journey({}, [touch({ label: 'How the operator console works', acquisition: 'youtube' })]))).toBe('youtube');
-    // label says YouTube, but Trakyo attributed the click to an IG bio link
-    expect(acquisitionFor(journey({}, [touch({ label: 'YT long-form repost', acquisition: 'instagram' })]))).toBe('instagram');
-  });
-
-  test('without a stamp the keyword classification still runs', () => {
-    expect(acquisitionFor(journey({}, [touch({ label: 'YT long-form: agency build' })]))).toBe('youtube');
   });
 });
 

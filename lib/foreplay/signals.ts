@@ -1,11 +1,11 @@
 import type { AnalyticsDay, ForeplayAd } from '@/lib/foreplay/client';
 
 /**
- * Adscout's signal engine: pure functions over store snapshots, no network.
+ * Adscout's signal engine — pure functions over store snapshots, no network.
  * These are the derived facts that make the raw feeds worth watching:
  *
  *  - new_launch        an ad started running since the last sync
- *  - winner            a LIVE ad crossed a longevity threshold (21/30/60d) -
+ *  - winner            a LIVE ad crossed a longevity threshold (21/30/60d) —
  *                      longevity is the one honest public proxy for spend
  *  - killed            an ad that was live last sync has been turned off
  *  - velocity_spike /  day-over-day active-ads count moved ≥30% against the
@@ -31,10 +31,10 @@ export function daysRunning(ad: ForeplayAd): number {
   return Math.floor((ad.running_duration?.seconds ?? 0) / DAY_SECONDS);
 }
 
-/** Transcript filler that isn't a hook: silence-only captures and stubs. */
+/** Transcript filler that isn't a hook — silence-only captures and stubs. */
 const JUNK_HOOKS = /^(thanks for watching|you|\.+|music)\W*$/i;
 
-/** First transcript sentence of an ad: the hook line, when there is one. */
+/** First transcript sentence of an ad — the hook line, when there is one. */
 export function hookLine(ad: ForeplayAd): string | null {
   const first = ad.timestamped_transcription?.[0]?.sentence?.trim();
   const line = first || ad.full_transcription?.split(/[.!?]/)[0]?.trim() || '';
@@ -57,12 +57,12 @@ export function diffBrandAds(args: {
     const before = prevById.get(ad.id);
     const days = daysRunning(ad);
     const hook = hookLine(ad);
-    // Empty-string headlines are common: ?? alone lets them through.
+    // Empty-string headlines are common — ?? alone lets them through.
     const headline = ad.headline?.trim();
     const label = hook ? `"${hook.slice(0, 80)}"` : headline || ad.display_format?.trim() || 'ad';
 
     if (!before) {
-      // First sight. Only call it a launch when it's actually young: a brand
+      // First sight. Only call it a launch when it's actually young — a brand
       // added to the watchlist arrives with its whole back catalog.
       if (ad.live && days <= 7) {
         signals.push({ type: 'new_launch', brandId, brandName, adId: ad.id, at, message: `${brandName} launched ${label}` });
@@ -116,7 +116,7 @@ export function velocitySignal(args: {
   };
 }
 
-/** Live ads ranked by longevity: the winners wall, and the hook bank's source. */
+/** Live ads ranked by longevity — the winners wall, and the hook bank's source. */
 export function winners(ads: ForeplayAd[], minDays = 21): ForeplayAd[] {
   return ads
     .filter((a) => a.live && daysRunning(a) >= minDays)
@@ -139,8 +139,73 @@ export function driverFingerprint(ads: ForeplayAd[]): Record<string, number> {
   );
 }
 
-/** One digest line per signal: feeds agent-run summaries and the daily briefing. */
+/** One digest line per signal — feeds agent-run summaries and the daily briefing. */
 export function digest(signals: Signal[]): string {
   if (signals.length === 0) return 'No changes across the watchlist.';
   return signals.map((s) => s.message).join(' · ');
+}
+
+/** A collapsed run of identical signals: the first one, plus how many and which. */
+export type DedupedSignal<T> = T & { count: number; ids: string[] };
+
+export type DedupeOptions<T> = {
+  /** Merge only while each signal is within this many ms of the run's first. */
+  windowMs?: number;
+  /** Merge only within the same local calendar day as the run's first (S01 F25 "×N"). */
+  sameDay?: boolean;
+  /** Identity for `ids`. Default: `id`, else `adId`, else `at`. */
+  idOf?: (signal: T, index: number) => string;
+};
+
+function defaultIdOf(s: { at: string; id?: unknown; adId?: unknown }): string {
+  if (typeof s.id === 'string' && s.id) return s.id;
+  if (typeof s.adId === 'string' && s.adId) return s.adId;
+  return s.at;
+}
+
+function sameLocalDay(a: number, b: number): boolean {
+  const x = new Date(a);
+  const y = new Date(b);
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
+
+/**
+ * Collapse CONSECUTIVE signals with an identical `message` into one row
+ * (SPEC X5): `{ ...first, count, ids }`. Order is kept; a different message in
+ * between starts a new run. With `windowMs` and/or `sameDay`, a signal joins
+ * the run only while it is that close to the run's first signal; with
+ * neither, every consecutive repeat merges. A signal whose `at` does not
+ * parse never merges under a time rule (its distance is unknown).
+ *
+ * Users: AdPilot activity tab (S01 F25, `sameDay`), Proof library drawer
+ * (S04 B26, `windowMs: 24h`).
+ */
+export function dedupeSignals<T extends { message: string; at: string }>(
+  signals: readonly T[],
+  opts: DedupeOptions<T> = {},
+): DedupedSignal<T>[] {
+  const idOf = opts.idOf ?? ((s: T) => defaultIdOf(s as T & { id?: unknown; adId?: unknown }));
+  const timed = opts.windowMs !== undefined || opts.sameDay === true;
+  const out: DedupedSignal<T>[] = [];
+  let runStart = NaN;
+  signals.forEach((s, i) => {
+    const prev = out[out.length - 1];
+    const t = Date.parse(s.at);
+    let joins = !!prev && prev.message === s.message;
+    if (joins && timed) {
+      if (!Number.isFinite(t) || !Number.isFinite(runStart)) joins = false;
+      else {
+        if (opts.windowMs !== undefined && Math.abs(t - runStart) > opts.windowMs) joins = false;
+        if (opts.sameDay && !sameLocalDay(t, runStart)) joins = false;
+      }
+    }
+    if (joins && prev) {
+      prev.count += 1;
+      prev.ids.push(idOf(s, i));
+    } else {
+      out.push({ ...s, count: 1, ids: [idOf(s, i)] });
+      runStart = t;
+    }
+  });
+  return out;
 }

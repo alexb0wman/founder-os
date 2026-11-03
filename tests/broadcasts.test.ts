@@ -3,10 +3,10 @@ import Database from 'better-sqlite3';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { createRuntime, type RuntimeAgent } from '@/lib/agents/runtime';
 
-let db: FounderDb;
+let db: GladosDb;
 
 afterEach(() => {
   db?.close();
@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe('agents table migration', () => {
   test('openDb upgrades a pre-hierarchy agents table in place', () => {
-    const file = path.join(mkdtempSync(path.join(tmpdir(), 'founder-migrate-')), 'old.db');
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'glados-migrate-')), 'old.db');
     const raw = new Database(file);
     raw.exec(`
       CREATE TABLE agents (

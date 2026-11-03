@@ -7,7 +7,7 @@
 
 export type BankSummary = {
   account: string; // last-4, e.g. '7001'
-  business: string; // 'General Operations' | 'Vantage'
+  business: string; // 'General Operations' | 'Zenith'
   month: string; // 'YYYY-MM' (from Statement Date)
   creditsCents: number; // income / deposits this period
   debitsCents: number; // outflow this period (positive magnitude)

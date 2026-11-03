@@ -1,4 +1,6 @@
 import {
+  Briefcase,
+  Magnet,
   Box,
   UserRound,
   Wand2,
@@ -45,13 +47,18 @@ import {
   Play,
   HardDrive,
   RefreshCw,
+  FolderTree,
+  MonitorSmartphone,
+  Gauge,
+  FlaskConical,
+  CandlestickChart,
   type LucideIcon,
 } from 'lucide-react';
 
 /**
  * The Blueprint icon language: node.icon (a plain string set by the
  * compiler) maps to a Lucide component here. Unknown names fall back to Box
- *: the canvas can never crash on an icon it doesn't recognize.
+ * — the canvas can never crash on an icon it doesn't recognize.
  */
 const ICON_MAP: Record<string, LucideIcon> = {
   box: Box,
@@ -100,6 +107,13 @@ const ICON_MAP: Record<string, LucideIcon> = {
   play: Play,
   'hard-drive': HardDrive,
   'refresh-cw': RefreshCw,
+  'folder-tree': FolderTree,
+  'monitor-smartphone': MonitorSmartphone,
+  gauge: Gauge,
+  'flask-conical': FlaskConical,
+  'candlestick-chart': CandlestickChart,
+  briefcase: Briefcase,
+  magnet: Magnet,
 };
 
 export function iconFor(name: string): LucideIcon {

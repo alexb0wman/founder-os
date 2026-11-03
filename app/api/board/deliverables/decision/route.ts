@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
+import { deliverableDecisions } from '@/founderos/lib/decisions';
 import { getDb } from '@/lib/data';
-import { DeliverableDecisionSchema } from '@/lib/schemas';
+import { DeliverableDecisionSchema } from '@/founderos/lib/schemas';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
       const itemId = typeof item?.id === 'string' ? item.id : '';
       if (!itemId) continue;
       if (raw.decision === null) {
-        db.deliverableDecisions.clear(itemId);
+        deliverableDecisions.clear(itemId);
         count += 1;
         continue;
       }
@@ -62,7 +63,7 @@ export async function POST(request: Request) {
         note: '',
       });
       if (!parsed.success) continue;
-      db.deliverableDecisions.set(parsed.data);
+      deliverableDecisions.set(parsed.data);
       count += 1;
     }
     return NextResponse.json({ ok: true, count });
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
 
   // An explicit null clears the call rather than recording a third state.
   if (raw.decision === null) {
-    db.deliverableDecisions.clear(id);
+    deliverableDecisions.clear(id);
     return NextResponse.json({ ok: true, decision: null });
   }
 
@@ -88,6 +89,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'invalid decision' }, { status: 400 });
   }
 
-  db.deliverableDecisions.set(parsed.data);
+  deliverableDecisions.set(parsed.data);
   return NextResponse.json({ ok: true, decision: parsed.data });
 }

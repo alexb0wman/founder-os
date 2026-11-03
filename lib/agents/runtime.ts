@@ -1,18 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { FounderDb } from '@/lib/db';
+import type { GladosDb } from '@/lib/db';
 import type { LlmToolSpec } from '@/lib/connectors/llm';
-import { runCostUsd } from '@/lib/agent-costs';
 import type { AgentRun, Broadcast } from '@/lib/schemas';
 
-export type AgentRunResult = {
-  ok: boolean;
-  summary: string;
-  data?: unknown;
-  /** LLM usage, when the run called the model. Priced onto the stored run. */
-  model?: string;
-  tokensIn?: number;
-  tokensOut?: number;
-};
+export type AgentRunResult = { ok: boolean; summary: string; data?: unknown };
 
 export type RuntimeAgent = {
   id: string;
@@ -21,8 +12,14 @@ export type RuntimeAgent = {
   departmentId: string;
   run(): Promise<AgentRunResult>;
   /**
+   * Cheap, synchronous: can this agent actually do its job on this host right
+   * now (key present, binary on disk, daemon installed)? Absent means "yes".
+   * The Blueprint uses it so 'live' is never claimed for a stub.
+   */
+  configured?(): boolean;
+  /**
    * Optional conversational entry point used by broadcasts. Agents that can
-   * actually act on a message (e.g. the data agent querying G-Brain)
+   * actually act on a message (e.g. the data agent querying Optimal Engine)
    * implement this; everyone else falls back to run() and replies with live
    * status. A future OpenClaw/Claude Code binding plugs in here.
    */
@@ -34,7 +31,7 @@ export type RuntimeAgent = {
   chatTools?(): LlmToolSpec[];
 };
 
-export function createRuntime(db: FounderDb, agents: RuntimeAgent[]) {
+export function createRuntime(db: GladosDb, agents: RuntimeAgent[]) {
   const registry = new Map(agents.map((a) => [a.id, a]));
 
   return {
@@ -52,7 +49,6 @@ export function createRuntime(db: FounderDb, agents: RuntimeAgent[]) {
       } catch (err) {
         result = { ok: false, summary: err instanceof Error ? err.message : String(err) };
       }
-      const priced = result.tokensIn != null || result.tokensOut != null;
       const run: AgentRun = {
         id: randomUUID(),
         agentId: id,
@@ -60,10 +56,6 @@ export function createRuntime(db: FounderDb, agents: RuntimeAgent[]) {
         finishedAt: new Date().toISOString(),
         ok: result.ok,
         summary: result.summary,
-        model: result.model ?? null,
-        tokensIn: result.tokensIn ?? null,
-        tokensOut: result.tokensOut ?? null,
-        costUsd: priced ? runCostUsd(result.tokensIn ?? 0, result.tokensOut ?? 0, result.model) : null,
       };
       db.agentRuns.insert(run);
       return run;

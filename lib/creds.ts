@@ -1,14 +1,14 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { BRAIN_SWR_PREFIX, CONNECTORS_SWR_PREFIX, invalidateSwr } from '@/lib/swr';
 
 /**
- * Credential resolution for connectors. Everything comes from the environment:
- * a fresh read of .env.local first (so the connect flow takes effect without a
- * restart), then process.env, then ONE optional generic file at
- * ~/.founder-os/.env for a machine that keeps its keys outside the project.
- * Nothing reaches into any other application's config, and no secret is ever
- * copied into this repo.
+ * Credential resolution for connectors. the operator's keys already live in
+ * canonical locations around the machine (~/.config/social/.env,
+ * knowledge/.env.agents, ~/.config/mcp.json, project .env files). Connectors
+ * resolve from process.env first, then fall back to those files at runtime —
+ * no secrets are ever copied into this repo.
  */
 
 export function parseEnvFile(content: string): Record<string, string> {
@@ -33,27 +33,21 @@ export function parseEnvFile(content: string): Record<string, string> {
   return out;
 }
 
-const HOME = os.homedir();
-
-/** The ONE optional fallback file, deliberately generic: a connector must never
- *  reach into a particular person's machine or another app's config. Override
- *  it with FOUNDER_OS_CRED_FILE. */
-export function credFilePath(): string {
-  return process.env.FOUNDER_OS_CRED_FILE ?? path.join(HOME, '.founder-os', '.env');
+export function extractMcpEnvKey(claudeJson: unknown, server: string, key: string): string | undefined {
+  const servers = (claudeJson as { mcpServers?: Record<string, { env?: Record<string, string> }> })
+    ?.mcpServers;
+  return servers?.[server]?.env?.[key];
 }
 
-/** Kept as a record so call sites read `CRED_FILES.<whatever>`; every entry is
- *  the same generic file. There is only one. */
+const HOME = os.homedir();
+
 export const CRED_FILES = {
-  get socialMedia() {
-    return credFilePath();
-  },
-  get brainAgent() {
-    return credFilePath();
-  },
-  get arcads() {
-    return credFilePath();
-  },
+  socialMedia: path.join(HOME, '.config/social', '.env'),
+  agentsEnv: path.join(HOME, 'knowledge', '.env.agents'),
+  arcads: path.join(HOME, 'Projects', 'arcads-agent-skills', '.env'),
+  /** the arcads-claude-code reference project keeps the same key; read when the skills file is absent */
+  arcadsReference: path.join(HOME, 'Desktop', 'PROJECTS', 'arcads-claude-code', '.env'),
+  claudeJson: path.join(HOME, '.config/mcp.json'),
 };
 
 function readEnvFileSafe(filePath: string): Record<string, string> {
@@ -68,11 +62,11 @@ function readEnvFileSafe(filePath: string): Record<string, string> {
  * Next only loads .env.local into process.env at boot; the connect flow needs
  * a paste to take effect immediately. So .env.local is ALSO read fresh at
  * call time, and it outranks process.env (the file is what booted the process,
- * so a fresh read is never staler than boot). FOUNDER_OS_ENV_LOCAL overrides
+ * so a fresh read is never staler than boot). GLADOS_ENV_LOCAL overrides
  * the path for tests. */
 
 export function envLocalPath(): string {
-  return process.env.FOUNDER_OS_ENV_LOCAL ?? path.join(process.cwd(), '.env.local');
+  return process.env.GLADOS_ENV_LOCAL ?? path.join(process.cwd(), '.env.local');
 }
 
 export function readEnvLocal(): Record<string, string> {
@@ -102,6 +96,9 @@ export function upsertEnvLocal(values: Record<string, string>): void {
   while (next.length > 0 && next[next.length - 1] === '') next.pop();
   for (const [key, v] of pending) next.push(`${key}=${v}`);
   fs.writeFileSync(file, next.join('\n') + '\n', { mode: 0o600 });
+  // A key changed: the next render checks connectors (and the brain) for real (lib/swr.ts).
+  invalidateSwr(CONNECTORS_SWR_PREFIX);
+  invalidateSwr(BRAIN_SWR_PREFIX);
 }
 
 /** Drop the named keys; every other line stays byte-identical. */
@@ -118,6 +115,8 @@ export function removeEnvLocal(keys: string[]): void {
     .split('\n')
     .filter((line) => !drop.has(line.trim().replace(/^export /, '').split('=')[0]?.trim() ?? ''));
   fs.writeFileSync(file, next.join('\n'), { mode: 0o600 });
+  invalidateSwr(CONNECTORS_SWR_PREFIX);
+  invalidateSwr(BRAIN_SWR_PREFIX);
 }
 
 /** process.env with a fresh .env.local overlay — hand this to connectors that
@@ -126,12 +125,16 @@ export function runtimeEnv(): Record<string, string | undefined> {
   return { ...process.env, ...readEnvLocal() };
 }
 
-/** Fresh .env.local first, then process.env, then each env file in order. */
+/** Fresh .env.local first, then process.env, then each env file in order.
+ *  A key that is PRESENT but blank (`KEY=` in .env.local, or an empty string
+ *  in process.env) is a deliberate "unset": resolution stops there and returns
+ *  undefined instead of falling through to the machine credential files. That
+ *  is how an operator disables a connector without deleting a shared file. */
 export function resolveCred(name: string, files: string[]): string | undefined {
-  const fromLocal = readEnvLocal()[name];
-  if (fromLocal) return fromLocal;
+  const local = readEnvLocal();
+  if (Object.prototype.hasOwnProperty.call(local, name)) return local[name].trim() ? local[name] : undefined;
   const fromEnv = process.env[name];
-  if (fromEnv) return fromEnv;
+  if (fromEnv !== undefined) return fromEnv.trim() ? fromEnv : undefined;
   for (const file of files) {
     const value = readEnvFileSafe(file)[name];
     if (value) return value;
@@ -139,13 +142,54 @@ export function resolveCred(name: string, files: string[]): string | undefined {
   return undefined;
 }
 
-/** Attio's key: env only — .env.local, then process.env, then the one generic
- *  fallback file. */
-export function resolveAttioKey(): string | undefined {
-  return resolveCred('ATTIO_API_KEY', [credFilePath()]);
+/**
+ * A key whose canonical home is an MCP registration in ~/.config/mcp.json (Attio, ManyChat).
+ * Same order and the same blank rule as resolveCred: .env.local, then process.env, and a key that is
+ * present there but blank is a deliberate unset (a masked env file during an audit, or an operator
+ * disabling the connector), so it never falls through to the MCP file (founderos-ui SPEC O12).
+ */
+function resolveMcpKey(name: string, server: string): string | undefined {
+  const local = readEnvLocal();
+  if (Object.prototype.hasOwnProperty.call(local, name)) return local[name].trim() ? local[name] : undefined;
+  const fromEnv = process.env[name];
+  if (fromEnv !== undefined) return fromEnv.trim() ? fromEnv : undefined;
+  try {
+    const claudeJson = JSON.parse(fs.readFileSync(CRED_FILES.claudeJson, 'utf8'));
+    return extractMcpEnvKey(claudeJson, server, name) || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-/** ManyChat's key, resolved exactly the same way. */
+/** Attio's key: .env.local / process.env, else the attio MCP registration (resolveMcpKey). */
+export function resolveAttioKey(): string | undefined {
+  return resolveMcpKey('ATTIO_API_KEY', 'attio');
+}
+
+/** ManyChat's key lives in ~/.config/mcp.json (the manychat MCP registration),
+ *  same reuse pattern as Attio. .env.local / process.env still win. */
 export function resolveManychatKey(): string | undefined {
-  return resolveCred('MANYCHAT_API_KEY', [credFilePath()]);
+  return resolveMcpKey('MANYCHAT_API_KEY', 'manychat');
+}
+
+/** An absolute http(s) URL, or null. Anything else (empty, relative,
+ *  javascript:, malformed) is treated as unset, so a link built from config
+ *  can never reload the page or run script. */
+export function safeHttpUrl(raw: string | null | undefined): string | null {
+  const value = raw?.trim();
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** bdpilot's Telegram approval bot link (SPEC S02 FR-B7, H5). Null when
+ *  BDPILOT_BOT_URL is unset or not an http(s) URL: /brand-deals then hides
+ *  the link instead of rendering a dead one. Fresh .env.local wins, as for
+ *  every other key. */
+export function resolveBdpilotBotUrl(): string | null {
+  return safeHttpUrl(readEnvLocal().BDPILOT_BOT_URL || process.env.BDPILOT_BOT_URL);
 }

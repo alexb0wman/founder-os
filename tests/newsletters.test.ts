@@ -82,22 +82,12 @@ describe('parseBeehiivPosts — REST posts+stats to Newsletter[]', () => {
 });
 
 describe('getNewsletters — live with seeded fallback', () => {
-  test('falls back to the seed when no key is configured', async () => {
+  test('returns the honest empty fallback when no key is configured', async () => {
     const list = await getNewsletters({}); // empty env: no BEEHIIV_API_KEY
     expect(list).toEqual(SEED_NEWSLETTERS);
-    expect(list.length).toBeGreaterThan(0);
+    expect(list).toEqual([]);
   });
 
-  test('the seed is a valid, sent-ordered set', () => {
-    expect(SEED_NEWSLETTERS.length).toBeGreaterThanOrEqual(3);
-    for (const n of SEED_NEWSLETTERS) {
-      expect(() => NewsletterSchema.parse(n)).not.toThrow();
-      expect(n.openRate).toBeGreaterThan(0);
-    }
-    // newest first
-    const dates = SEED_NEWSLETTERS.map((n) => n.publishedAt);
-    expect([...dates].sort((a, b) => b.localeCompare(a))).toEqual(dates);
-  });
 });
 
 describe('newsletterSummary — aggregate metrics', () => {
@@ -113,8 +103,8 @@ describe('newsletterSummary — aggregate metrics', () => {
     expect(s.bestOpenRate).toBe(30);
   });
 
-  test('an empty list yields zeroed, non-throwing summary', () => {
+  test('an empty list yields null open rates (no fake 0.0%), non-throwing', () => {
     const s = newsletterSummary([]);
-    expect(s).toEqual({ count: 0, totalRecipients: 0, avgOpenRate: 0, bestOpenRate: 0 });
+    expect(s).toEqual({ count: 0, totalRecipients: 0, avgOpenRate: null, bestOpenRate: null });
   });
 });

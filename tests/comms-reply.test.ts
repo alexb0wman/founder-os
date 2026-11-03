@@ -15,4 +15,19 @@ describe('sendEmailReply', () => {
     );
     expect(r.ok).toBe(false);
   });
+
+  it('never sends directly: routes through gsend draft and fails honestly when gsend is absent', async () => {
+    const r = await sendEmailReply(
+      { accountId: 'inbox-1', to: 'x@example.com', subject: 'Re', text: 'hi' },
+      {
+        INBOX_1_HOST: 'imap.gmail.com',
+        INBOX_1_USER: 'me@x.com',
+        INBOX_1_PASS: 'p',
+        GSEND_BIN: '/nonexistent/gsend-binary',
+      },
+    );
+    // no gsend on this machine -> honest failure, and crucially no SMTP path
+    expect(r.ok).toBe(false);
+    expect(typeof r.error).toBe('string');
+  });
 });

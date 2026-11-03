@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 
-let db: FounderDb;
+let db: GladosDb;
 
 afterEach(() => {
   db?.close();
@@ -15,7 +15,6 @@ describe('openDb', () => {
     expect(db.tools.all()).toEqual([]);
     expect(db.roadmap.all()).toEqual([]);
     expect(db.metrics.all()).toEqual([]);
-    expect(db.domains.all()).toEqual([]);
     expect(db.phases.all()).toEqual([]);
   });
 
@@ -32,7 +31,7 @@ describe('openDb', () => {
     const agent = {
       id: 'agent-command-center',
       departmentId: 'dept-tech',
-      name: 'command-center',
+      name: 'Command Center',
       role: 'Chief Orchestrator',
       status: 'active' as const,
       tier: 'lead' as const,
@@ -98,18 +97,5 @@ describe('openDb', () => {
       order: 1,
     });
     expect(db.departments.all().map((d) => d.id)).toEqual(['first', 'second']);
-  });
-
-  test('round-trips a business reference model domain with items array', () => {
-    db = openDb(':memory:');
-    const domain = {
-      id: 'brm-9',
-      number: 9,
-      title: 'Legal',
-      color: '#fbbf24',
-      items: ['Contracts', 'Compliance'],
-    };
-    db.domains.insert(domain);
-    expect(db.domains.all()).toEqual([domain]);
   });
 });

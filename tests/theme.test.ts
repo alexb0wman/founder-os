@@ -1,15 +1,14 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { DEFAULT_THEME, THEMES, THEME_META, THEME_STORAGE_KEY, THEME_INIT_SCRIPT, isTheme, nextTheme, resolveInitialTheme } from '@/lib/theme';
+import { DEFAULT_THEME, THEMES, THEME_META, THEME_STORAGE_KEY, isTheme, nextTheme, resolveInitialTheme } from '@/lib/theme';
+import { APPEARANCE_INIT_SCRIPT } from '@/lib/appearance';
 
-describe('theme registry', () => {
-  test('six pickable themes, mono (Monolith) first as the default identity', () => {
-    expect(DEFAULT_THEME).toBe('mono');
-    expect(THEMES[0]).toBe(DEFAULT_THEME);
-    expect(THEMES).toEqual(['mono', 'mono-light', 'dark', 'light', 'midnight', 'ember']);
-    expect(new Set(THEMES).size).toBe(THEMES.length);
-    expect(THEME_STORAGE_KEY).toBe('alex-theme');
+describe('theme registry — Console default; Red, White, Frost and Grey Frost the sanctioned colorways', () => {
+  test('console stays the default; the five colorways are registered in picker order', () => {
+    expect(DEFAULT_THEME).toBe('console');
+    expect(THEMES).toEqual(['console', 'red', 'light', 'frost', 'grey-frost']);
+    expect(THEME_STORAGE_KEY).toBe('glados-theme');
   });
 
   test('every theme carries picker metadata: name, blurb, 3 swatch colors', () => {
@@ -22,60 +21,65 @@ describe('theme registry', () => {
     }
   });
 
-  test('isTheme guards arbitrary strings', () => {
-    expect(isTheme('dark')).toBe(true);
-    expect(isTheme('midnight')).toBe(true);
-    expect(isTheme('sepia')).toBe(false);
+  test('isTheme guards arbitrary strings — retired ids are no longer valid', () => {
+    expect(isTheme('console')).toBe(true);
+    expect(isTheme('red')).toBe(true);
+    expect(isTheme('light')).toBe(true);
+    expect(isTheme('frost')).toBe(true);
+    expect(isTheme('grey-frost')).toBe(true);
+    expect(isTheme('grey')).toBe(false);
+    expect(isTheme('mono')).toBe(false);
+    expect(isTheme('glados-glass')).toBe(false);
     expect(isTheme(null)).toBe(false);
   });
 
-  test('resolveInitialTheme honors any valid stored value, else falls back to mono', () => {
-    expect(resolveInitialTheme('ember')).toBe('ember');
-    expect(resolveInitialTheme('dark')).toBe('dark');
-    expect(resolveInitialTheme(null)).toBe('mono');
-    expect(resolveInitialTheme('garbage')).toBe('mono');
+  test('resolveInitialTheme falls back to console for stale stored ids', () => {
+    expect(resolveInitialTheme('console')).toBe('console');
+    expect(resolveInitialTheme('red')).toBe('red');
+    expect(resolveInitialTheme('grey-frost')).toBe('grey-frost');
+    expect(resolveInitialTheme('glados-glass')).toBe('console');
+    expect(resolveInitialTheme('mono')).toBe('console');
+    expect(resolveInitialTheme(null)).toBe('console');
   });
 
-  test('nextTheme cycles the whole ring', () => {
-    const seen: string[] = [];
-    let t: (typeof THEMES)[number] = THEMES[0];
-    for (let i = 0; i < THEMES.length; i++) {
-      seen.push(t);
-      t = nextTheme(t);
+  test('nextTheme cycles the ring', () => {
+    expect(nextTheme('console')).toBe('red');
+    expect(nextTheme('red')).toBe('light');
+    expect(nextTheme('light')).toBe('frost');
+    expect(nextTheme('frost')).toBe('grey-frost');
+    expect(nextTheme('grey-frost')).toBe('console');
+  });
+
+  test('the pre-paint init script (lib/appearance.ts) reads the theme key and falls back to console', () => {
+    expect(APPEARANCE_INIT_SCRIPT).toContain(JSON.stringify(THEME_STORAGE_KEY));
+    expect(APPEARANCE_INIT_SCRIPT).toContain(`DT="console"`);
+  });
+
+  test('the pre-paint init script accepts every registered id, grey-frost included', () => {
+    for (const t of THEMES) expect(APPEARANCE_INIT_SCRIPT).toContain(JSON.stringify(t));
+    expect(APPEARANCE_INIT_SCRIPT).toContain('"grey-frost"');
+  });
+
+  test('Grey Frost carries the S06 picker entry', () => {
+    expect(THEME_META['grey-frost'].name).toBe('Grey Frost');
+    expect(THEME_META['grey-frost'].blurb).toBe("Frost's ice ink, signal and glow on a soft grey ground");
+    expect(THEME_META['grey-frost'].swatch).toEqual(['#18191d', '#9fc6ff', '#ecf2fa']);
+  });
+
+  test('globals.css groups the bare :root with console, so no-JS loads render Console', () => {
+    const css = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8');
+    expect(css).toMatch(/:root,\s*\n:root\[data-theme='console'\]/);
+  });
+
+  test('no retired theme token blocks survive in globals.css', () => {
+    const css = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8');
+    for (const dead of ['mono', 'mono-light', 'glados', 'glados-glass', 'midnight', 'ember']) {
+      expect(css, dead).not.toContain(`data-theme='${dead}'`);
     }
-    expect(seen).toEqual([...THEMES]);
-    expect(t).toBe(THEMES[0]); // full circle
   });
 
-  test('the pre-paint init script accepts every registered theme id and falls back to mono', () => {
-    for (const t of THEMES) expect(THEME_INIT_SCRIPT).toContain(t);
-    expect(THEME_INIT_SCRIPT).toContain(THEME_STORAGE_KEY);
-    expect(THEME_INIT_SCRIPT).toContain(`t="mono"`);
-    expect(THEME_INIT_SCRIPT).not.toContain(`t="dark"`);
-  });
-
-  test('globals.css groups the bare :root with mono, so no-JS loads default to Monolith', () => {
+  test('console carries the four-step data ramp', () => {
     const css = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8');
-    expect(css).toMatch(/:root,\s*\n:root\[data-theme='mono'\]/);
-    expect(css).not.toMatch(/:root,\s*\n:root\[data-theme='dark'\]/);
-  });
-
-  test('every registered theme has its own token block in app/globals.css', () => {
-    const css = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8');
-    for (const t of THEMES) expect(css, t).toContain(`data-theme='${t}'`);
-  });
-
-  test('Daylight is the G-Brain blue skin: steel-azure accent on a cool blue-white canvas', () => {
-    // 2026-08-20: the operator re-anchored Daylight to the inverted G-Brain graph
-    // from the Zero API cover (invert(#E07B39) ≈ #1F84C6), replacing the
-    // old neutral slate accent.
-    expect(THEME_META['mono-light'].swatch).toEqual(['#f2f6f9', '#1f84c6', '#16222c']);
-    const css = readFileSync(join(process.cwd(), 'app/globals.css'), 'utf8');
-    const block = css.match(/:root\[data-theme='mono-light'\] \{[^}]+\}/)?.[0] ?? '';
-    expect(block).toContain('--bg: #f2f6f9');
-    expect(block).toContain('--text: #16222c');
-    expect(block).toContain('--accent: #4db3de');
-    // the old slate-as-accent Daylight is gone
-    expect(block).not.toContain('--accent: #1b1e23');
+    for (const v of ['--ramp-1', '--ramp-2', '--ramp-3', '--ramp-4']) expect(css).toContain(v);
   });
 });

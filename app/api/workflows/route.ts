@@ -6,7 +6,7 @@ import { WorkflowInputSchema, buildWorkflowSteps, slugifyWorkflowName } from './
 
 export const dynamic = 'force-dynamic';
 
-/** The full workflow list: mirrors the shape app/workflows/page.tsx reads
+/** The full workflow list — mirrors the shape app/workflows/page.tsx reads
  *  server-side; exposed here too so a client that only has fetch (the
  *  builder, after a save) can confirm what actually landed. */
 export async function GET() {
@@ -14,7 +14,7 @@ export async function GET() {
 }
 
 /** Creates a new workflow from the builder panel. Never touches an
- *  existing row: always inserts a fresh id: so a double-submit at worst
+ *  existing row — always inserts a fresh id — so a double-submit at worst
  *  creates two workflows, never corrupts one. */
 export async function POST(request: Request) {
   const parsed = WorkflowInputSchema.safeParse(await request.json().catch(() => null));
@@ -32,8 +32,9 @@ export async function POST(request: Request) {
     revenueUsd: 0,
     order,
     steps: buildWorkflowSteps(id, parsed.data.steps),
+    ...(parsed.data.ratioTarget != null ? { ratioTarget: parsed.data.ratioTarget } : {}),
   };
-  WorkflowSchema.parse(workflow); // belt + suspenders: the DB layer parses too
-  db.workflows.insert(workflow);
+  WorkflowSchema.parse(workflow); // belt + suspenders — the DB layer parses too
+  db.workflows.insert(workflow, parsed.data.note?.trim() || 'created from the builder');
   return NextResponse.json({ workflow }, { status: 201 });
 }

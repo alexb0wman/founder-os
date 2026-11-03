@@ -2,13 +2,7 @@ import { describe, expect, test } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import {
-  createGBrainProvider,
-  parseGbrainStats,
-  parseQueryOutput,
-  execTimeoutFor,
-  type ExecFn,
-} from '@/lib/connectors/gbrain';
+import { createGBrainProvider, parseGbrainStats, execTimeoutFor, type ExecFn } from '@/lib/connectors/gbrain';
 
 const healthyExec: ExecFn = async (_cmd, args) => {
   if (args[0] === 'doctor') {
@@ -25,7 +19,7 @@ const healthyExec: ExecFn = async (_cmd, args) => {
       code: 0,
     };
   }
-  return { stdout: 'projects/founder-os -- FOUNDER OS build notes\n', stderr: '', code: 0 };
+  return { stdout: 'projects/glados -- GLADOS build notes\n', stderr: '', code: 0 };
 };
 
 const downExec: ExecFn = async () => ({
@@ -34,12 +28,27 @@ const downExec: ExecFn = async () => ({
   code: 1,
 });
 
+// Verbatim shape of real `gbrain query --no-expand` output (v0.50): a scored
+// result line, then a wrapped continuation line carrying neither score nor
+// ` -- `. The continuation must never surface as its own result.
+const wrappedExec: ExecFn = async (_cmd, args) => {
+  if (args[0] === 'doctor') return { stdout: '{}', stderr: '', code: 0 };
+  return {
+    stdout:
+      '[0.4172] context/gaps -- Still open: off-limits partners/brands.\n' +
+      '- **Decision style** — Fast-\n' +
+      '[0.3967] projects/ventureos-info/offer-scaffold -- $497 to $1,399\n',
+    stderr: '',
+    code: 0,
+  };
+};
+
 function makeStore(): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'brain-store-'));
   mkdirSync(path.join(dir, 'projects'));
   writeFileSync(
-    path.join(dir, 'projects', 'founder-os.md'),
-    '# FOUNDER OS\nThe personal OS rebuild uses a revenue split model for Launchpad Cohort.\n',
+    path.join(dir, 'projects', 'glados.md'),
+    '# GLADOS\nThe personal OS rebuild uses a revenue split model for Workshop.\n',
   );
   writeFileSync(path.join(dir, 'README.md'), '# Brain Store\nNothing relevant here.\n');
   return dir;
@@ -66,8 +75,28 @@ describe('GBrain provider', () => {
     const results = await brain.search('revenue split');
     expect(results.length).toBeGreaterThanOrEqual(1);
     expect(results[0].source).toBe('brain-store');
-    expect(results[0].title).toContain('founder-os');
+    expect(results[0].title).toContain('glados');
     expect(results[0].snippet.toLowerCase()).toContain('revenue split');
+  });
+
+  test('drops wrapped continuation lines instead of rendering them as results', async () => {
+    const brain = createGBrainProvider({ exec: wrappedExec, storePath: makeStore() });
+    const results = await brain.search('venture-a pricing');
+
+    expect(results.map((r) => r.title)).toEqual([
+      'context/gaps',
+      'projects/ventureos-info/offer-scaffold',
+    ]);
+    expect(results[0].snippet).toBe('Still open: off-limits partners/brands.');
+    expect(results.every((r) => r.source === 'gbrain')).toBe(true);
+  });
+
+  test('still parses result lines that carry no score prefix', async () => {
+    const brain = createGBrainProvider({ exec: healthyExec, storePath: makeStore() });
+    const results = await brain.search('glados');
+    expect(results).toEqual([
+      { title: 'projects/glados', snippet: 'GLADOS build notes', source: 'gbrain' },
+    ]);
   });
 
   test('counts local markdown pages even when the database is down', async () => {
@@ -107,21 +136,21 @@ describe('GBrain provider', () => {
 });
 
 const STATS_OUTPUT = `Pages:     916
-Chunks:    11185
-Embedded:  11185
+Chunks:    14600
+Embedded:  14600
 Links:     0
 Tags:      13
 Timeline:  0
 
 By type:
-  conversation: 652
+  conversation: 500
   note: 99
   concept: 89
 `;
 
 describe('execTimeoutFor', () => {
   test('gives write/embed commands a generous timeout and keeps reads fast-fail', () => {
-    // capture/import/embed hit the embedder + Supabase — measured ~13s warm, ~24s cold,
+    // capture/import/embed hit ZeroEntropy + Supabase — measured ~13s warm, ~24s cold,
     // so they need >15s of headroom or execFile kills them (SIGTERM).
     expect(execTimeoutFor(['capture', '--stdin', '--json'])).toBeGreaterThanOrEqual(45_000);
     expect(execTimeoutFor(['import', '/some/dir'])).toBeGreaterThanOrEqual(45_000);
@@ -137,10 +166,10 @@ describe('parseGbrainStats', () => {
   test('extracts page/chunk/embedded counts and the by-type breakdown', () => {
     const stats = parseGbrainStats(STATS_OUTPUT);
     expect(stats.pages).toBe(916);
-    expect(stats.chunks).toBe(11185);
-    expect(stats.embedded).toBe(11185);
+    expect(stats.chunks).toBe(14600);
+    expect(stats.embedded).toBe(14600);
     expect(stats.byType).toEqual([
-      { type: 'conversation', count: 652 },
+      { type: 'conversation', count: 500 },
       { type: 'note', count: 99 },
       { type: 'concept', count: 89 },
     ]);
@@ -157,14 +186,10 @@ describe('GBrain stats()', () => {
     const stats = await brain.stats();
     expect(stats).toEqual({
       pages: 916,
-      chunks: 11185,
-      embedded: 11185,
-      // Links and Timeline are read too: zero on a store full of wikilinks is
-      // the ingest bug the Markdown Auditor now reports.
-      links: 0,
-      timeline: 0,
+      chunks: 14600,
+      embedded: 14600,
       byType: [
-        { type: 'conversation', count: 652 },
+        { type: 'conversation', count: 500 },
         { type: 'note', count: 99 },
         { type: 'concept', count: 89 },
       ],
@@ -222,87 +247,5 @@ describe('GBrain capture()', () => {
     const res = await brain.capture({ text: '   \n  ' });
     expect(res.ok).toBe(false);
     expect(called).toBe(false);
-  });
-});
-
-/**
- * `gbrain query` prints a multi-LINE record per hit, not one line per hit:
- *
- *   [0.8641] notes/2026/01/2026-01-05-sample -- # Sample
- *
- *   *(no messages)*
- *   [0.6839] projects/example-project -- # Example Project
- *
- * The original parser split on newlines and treated every line as a result,
- * so a body line like `hello` came back as the result `hello — hello` and the
- * score rode along inside the title. Caught the first time a recall was
- * rendered into a Hermes memory brief: eight "hits", four of them fragments of
- * the first one.
- */
-describe('parseQueryOutput — one record per [score] marker, not per line', () => {
-  const real = [
-    '[0.8641] notes/2026/01/2026-01-05-sample -- # Sample',
-    '',
-    '*(no messages)*',
-    '[0.6839] notes/2025/11/2025-11-14-sample -- # Sample',
-    '',
-    '## 1. You',
-    '*2025-11-14T00:12:19.262099Z*',
-    '',
-    'hello',
-    '[0.9605] projects/example-project -- # Example Project',
-    '',
-  ].join('\n');
-
-  test('three markers yield three results, not nine lines', () => {
-    expect(parseQueryOutput(real)).toHaveLength(3);
-  });
-
-  test('the slug is the title and the score is a number beside it', () => {
-    const top = parseQueryOutput(real)[0];
-    expect(top.title).toBe('projects/example-project');
-    expect(top.score).toBeCloseTo(0.9605);
-    expect(top.title).not.toContain('[');
-  });
-
-  test('body lines fold into the snippet of the record above them', () => {
-    const second = parseQueryOutput(real).find((r) => r.title.endsWith('2025-11-14-sample'))!;
-    expect(second.snippet).toContain('hello');
-    expect(parseQueryOutput(real).map((r) => r.title)).not.toContain('hello');
-  });
-
-  test('best score leads, so a brief truncated at the top keeps the best hit', () => {
-    expect(parseQueryOutput(real).map((r) => r.score)).toEqual([0.9605, 0.8641, 0.6839]);
-  });
-
-  test('the scoreless legacy form still parses', () => {
-    const [r] = parseQueryOutput('projects/founder-os -- FOUNDER OS build notes\n');
-    expect(r.title).toBe('projects/founder-os');
-    expect(r.snippet).toContain('FOUNDER OS build notes');
-    expect(r.score).toBeUndefined();
-  });
-
-  test('empty or non-result output yields nothing rather than junk', () => {
-    expect(parseQueryOutput('')).toEqual([]);
-    expect(parseQueryOutput('no results found\n')).toEqual([]);
-  });
-});
-
-describe('the provider uses that parser for a live query', () => {
-  const scoredExec: ExecFn = async (_cmd, args) => {
-    if (args[0] === 'doctor') return { stdout: '{"status":"healthy","health_score":95}', stderr: '', code: 0 };
-    return {
-      stdout: '[0.91] projects/northwind-logistics -- # Northwind Logistics\n\nRobin Sample, $9,200, an on-site workshop.\n',
-      stderr: '',
-      code: 0,
-    };
-  };
-
-  test('a real hit comes back whole, tagged gbrain', async () => {
-    const brain = createGBrainProvider({ exec: scoredExec, storePath: makeStore() });
-    const [hit] = await brain.search('northwind-logistics');
-    expect(hit.title).toBe('projects/northwind-logistics');
-    expect(hit.snippet).toContain('Robin Sample');
-    expect(hit.source).toBe('gbrain');
   });
 });

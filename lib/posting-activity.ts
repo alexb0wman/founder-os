@@ -43,15 +43,50 @@ export function bucketPostingByDay(posts: PostDay[], axis: string[]): PostingAct
   });
 }
 
-/** A value per axis day, carrying the last known value forward across gaps;
-    null for axis days before the first known point. */
-export function forwardFill(points: { date: string; value: number }[], axis: string[]): (number | null)[] {
-  const byDate = new Map(points.map((p) => [p.date, p.value]));
+export type FilledSeries = {
+  values: (number | null)[];
+  /** True where the day's value was carried from an earlier point (a gap or
+      a stale tail), so a chart can dash it. */
+  carried: boolean[];
+  /** Date of the point each value came from (null where there is none). */
+  from: (string | null)[];
+};
+
+/** A value per axis day, carrying the last known value forward across gaps.
+    The newest point dated before axis[0] is carried in, so a window that
+    starts after the last sync still plots (SPEC H17, R5); null only for days
+    before the first known point. */
+export function forwardFillCarried(points: { date: string; value: number }[], axis: string[]): FilledSeries {
+  const sorted = [...points].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  const byDate = new Map(sorted.map((p) => [p.date, p.value]));
   let last: number | null = null;
-  return axis.map((date) => {
-    if (byDate.has(date)) last = byDate.get(date)!;
-    return last;
-  });
+  let lastFrom: string | null = null;
+  if (axis.length > 0) {
+    for (const p of sorted) {
+      if (p.date >= axis[0]) break;
+      last = p.value;
+      lastFrom = p.date;
+    }
+  }
+  const values: (number | null)[] = [];
+  const carried: boolean[] = [];
+  const from: (string | null)[] = [];
+  for (const date of axis) {
+    const exact = byDate.has(date);
+    if (exact) {
+      last = byDate.get(date)!;
+      lastFrom = date;
+    }
+    values.push(last);
+    carried.push(last != null && !exact);
+    from.push(last != null ? lastFrom : null);
+  }
+  return { values, carried, from };
+}
+
+/** Values only; see forwardFillCarried. */
+export function forwardFill(points: { date: string; value: number }[], axis: string[]): (number | null)[] {
+  return forwardFillCarried(points, axis).values;
 }
 
 export type PlatformPostSeries = { key: string; points: { date: string; count: number }[]; total: number };

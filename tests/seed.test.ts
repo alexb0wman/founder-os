@@ -1,50 +1,16 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { seedDatabase } from '@/lib/seed';
+import { realAgents } from '@/lib/agents/real';
 
-let db: FounderDb;
+let db: GladosDb;
 
 afterEach(() => {
   db?.close();
 });
 
-describe('seedDatabase', () => {
-  test('populates every entity', () => {
-    db = openDb(':memory:');
-    seedDatabase(db);
-    expect(db.departments.all().length).toBeGreaterThanOrEqual(5);
-    expect(db.agents.all().length).toBeGreaterThanOrEqual(5);
-    expect(db.tools.all().length).toBeGreaterThanOrEqual(8);
-    expect(db.roadmap.all().length).toBeGreaterThanOrEqual(10);
-    expect(db.metrics.all().length).toBeGreaterThanOrEqual(4);
-    expect(db.domains.all().length).toBeGreaterThanOrEqual(8);
-    expect(db.phases.all().length).toBeGreaterThanOrEqual(3);
-    expect(db.workflows.all().length).toBeGreaterThanOrEqual(2);
-    expect(db.workflows.all().every((w) => w.steps.length >= 3)).toBe(true);
-    expect(db.skills.all().length).toBeGreaterThanOrEqual(8);
-    expect(db.agentTasks.all().length).toBeGreaterThanOrEqual(8);
-  });
-
-  test('every agent belongs to an existing department', () => {
-    db = openDb(':memory:');
-    seedDatabase(db);
-    const deptIds = new Set(db.departments.all().map((d) => d.id));
-    for (const agent of db.agents.all()) {
-      expect(deptIds.has(agent.departmentId)).toBe(true);
-    }
-  });
-
-  test('every seeded agent maps to a real runtime agent — no demo', async () => {
-    const { realAgents } = await import('@/lib/agents/real');
-    db = openDb(':memory:');
-    seedDatabase(db);
-    const runtimeIds = new Set(realAgents.map((a) => a.id));
-    for (const agent of db.agents.all()) {
-      expect(runtimeIds.has(agent.id)).toBe(true);
-    }
-  });
-
-  test('the six operating pillars, in order', () => {
+describe('seedDatabase (structural: a fresh install is blank)', () => {
+  test('seeds the six operating pillars, in order, and nothing else the operator owns', () => {
     db = openDb(':memory:');
     seedDatabase(db);
     expect(db.departments.all().map((d) => d.name)).toEqual([
@@ -55,184 +21,86 @@ describe('seedDatabase', () => {
       'Communications',
       'Clients',
     ]);
+    expect(db.people.all()).toEqual([]);
+    expect(db.tools.all()).toEqual([]);
+    expect(db.roadmap.all()).toEqual([]);
+    expect(db.metrics.all()).toEqual([]);
+    expect(db.phases.all()).toEqual([]);
+    expect(db.workflows.all()).toEqual([]);
+    expect(db.skills.all()).toEqual([]);
+    expect(db.agentTasks.all()).toEqual([]);
+    expect(db.emailList.snapshots()).toEqual([]);
+    expect(db.social.accounts()).toEqual([]);
+  });
+
+  test('the agent roster mirrors the runtime exactly — no larp in either direction', () => {
+    db = openDb(':memory:');
+    seedDatabase(db);
+    const seeded = new Set(db.agents.all().map((a) => a.id));
+    const runtime = new Set(realAgents.map((a) => a.id));
+    expect(seeded).toEqual(runtime);
+  });
+
+  test('every agent belongs to an existing department', () => {
+    db = openDb(':memory:');
+    seedDatabase(db);
+    const deptIds = new Set(db.departments.all().map((d) => d.id));
+    for (const agent of db.agents.all()) expect(deptIds.has(agent.departmentId)).toBe(true);
   });
 
   test('agents are homed in the right department', () => {
     db = openDb(':memory:');
     seedDatabase(db);
     const byId = new Map(db.agents.all().map((a) => [a.id, a.departmentId]));
-    // Sales: the deal / account / CRM lanes
-    for (const id of [
-      'sales-agent',
-      'crm-pulse',
-      'launchpad-cohort-sales',
-      'vantage-sales',
-      'vantage-paykit',
-      'sales-calls-data',
-    ]) {
-      expect(byId.get(id)).toBe('dept-sales');
-    }
-    // Finances: the payment processors moved off Sales
-    for (const id of [
-      'payments-pulse',
-      'stripe-sales',
-      'processor-confirmation',
-      'paykit-sales',
-      'flexpay-financing',
-    ]) {
-      expect(byId.get(id)).toBe('dept-finance');
-    }
-    expect(db.agents.all().filter((a) => a.departmentId === 'dept-finance').length).toBeGreaterThanOrEqual(5);
-    // Marketing/Growth: the social/content crew
-    for (const id of [
-      'social-agent',
-      'postly-publisher',
-      'adsmith-creative',
-      'reelkit-editor',
-      'renderly-creative',
-      'dmflow-mcp',
-    ]) {
-      expect(byId.get(id)).toBe('dept-marketing-growth');
-    }
-    // TECH: AI head, the G-Brain data crew, and automations
-    for (const id of ['conductor', 'data-agent', 'markdown-auditor', 'vector-auditor', 'stack-monitor']) {
-      expect(byId.get(id)).toBe('dept-tech');
-    }
-    for (const id of ['comms-agent', 'gmail-worker', 'whatsapp-worker', 'slack-worker']) {
-      expect(byId.get(id)).toBe('dept-comms');
-    }
+    for (const id of ['sales-agent', 'crm-pulse', 'deal-scanner', 'draft-approval-bot', 'inbound-watcher']) expect(byId.get(id)).toBe('dept-sales');
+    for (const id of ['comms-agent', 'gsend-sender', 'daily-briefing', 'automation-jobs']) expect(byId.get(id)).toBe('dept-comms');
+    for (const id of ['conductor', 'data-agent', 'markdown-auditor', 'vector-auditor', 'notion-sync', 'stack-monitor']) expect(byId.get(id)).toBe('dept-tech');
+    for (const id of ['team-briefing', 'brand-deal-drafter', 'adscout']) expect(byId.get(id)).toBe('dept-marketing-growth');
+    expect(byId.get('deal-alerts')).toBe('dept-clients');
   });
 
-  test('re-seeding removes departments that left the model', () => {
-    db = openDb(':memory:');
-    seedDatabase(db);
-    db.departments.insert({ id: 'dept-ghost', name: 'Ghost', slug: 'ghost', tagline: '', color: '#fff', order: 99 });
-    seedDatabase(db);
-    expect(db.departments.all().some((d) => d.id === 'dept-ghost')).toBe(false);
-  });
-
-  test('instance agents have task workers parented beneath them', () => {
+  test('workers are parented beneath the agent that delegates to them', () => {
     db = openDb(':memory:');
     seedDatabase(db);
     const byId = new Map(db.agents.all().map((a) => [a.id, a]));
-
-    // Comms: the channel workers that feed /comms hang off the comms agent
-    for (const worker of ['gmail-worker', 'whatsapp-worker', 'slack-worker']) {
-      expect(byId.get(worker)?.parentId).toBe('comms-agent');
-      expect(byId.get(worker)?.tier).toBe('worker');
+    for (const w of ['inbound-watcher', 'brand-deal-drafter']) expect(byId.get(w)?.parentId).toBe('draft-approval-bot');
+    for (const w of ['crm-pulse', 'deal-scanner', 'deal-alerts']) expect(byId.get(w)?.parentId).toBe('sales-agent');
+    for (const w of ['markdown-auditor', 'vector-auditor']) expect(byId.get(w)?.parentId).toBe('data-agent');
+    for (const top of ['comms-agent', 'draft-approval-bot', 'gsend-sender', 'daily-briefing', 'automation-jobs', 'conductor']) {
+      expect(byId.get(top)?.parentId).toBeNull();
+      expect(byId.get(top)?.tier).toBe('lead');
     }
-    // Studio: social media + content creation
-    for (const worker of ['postly-publisher', 'adsmith-creative', 'reelkit-editor', 'renderly-creative', 'dmflow-mcp']) {
-      expect(byId.get(worker)?.parentId).toBe('social-agent');
-    }
-    // Sales: CRM / account lanes hang off the sales instance
-    for (const worker of [
-      'crm-pulse',
-      'launchpad-cohort-sales',
-      'vantage-sales',
-      'sales-calls-data',
-    ]) {
-      expect(byId.get(worker)?.parentId).toBe('sales-agent');
-      expect(byId.get(worker)?.tier).toBe('worker');
-    }
-    expect(byId.get('vantage-paykit')?.parentId).toBe('vantage-sales');
-    expect(byId.get('vantage-paykit')?.tier).toBe('worker');
-    // Finances: the payment processors now report to Payments Pulse
-    for (const worker of ['stripe-sales', 'processor-confirmation', 'paykit-sales', 'flexpay-financing']) {
-      expect(byId.get(worker)?.parentId).toBe('payments-pulse');
-      expect(byId.get(worker)?.tier).toBe('worker');
-    }
-    // Knowledge: the G-Brain analyst and its auditors
-    for (const worker of ['markdown-auditor', 'vector-auditor']) {
-      expect(byId.get(worker)?.parentId).toBe('data-agent');
-    }
-    // Top-level agents are instance slots awaiting Clawline/Claude Code bindings
-    expect(byId.get('comms-agent')?.parentId).toBeNull();
-    expect(byId.get('comms-agent')?.instance).not.toBe('');
+    expect(byId.get('crm-pulse')?.tier).toBe('worker');
   });
 
-  test('re-seeding removes agents that left the roster', () => {
+  test('re-seeding retires departments and agents that left the model', () => {
     db = openDb(':memory:');
     seedDatabase(db);
+    db.departments.insert({ id: 'dept-ghost', name: 'Ghost', slug: 'ghost', tagline: '', color: '#fff', order: 99 });
     db.agents.insert({
       id: 'ghost', departmentId: 'dept-tech', name: 'Ghost', role: 'r', status: 'active',
       tier: 'lead', description: '', model: 'm', tools: [], parentId: null, instance: 'builtin',
     });
     seedDatabase(db);
+    expect(db.departments.all().some((d) => d.id === 'dept-ghost')).toBe(false);
     expect(db.agents.all().some((a) => a.id === 'ghost')).toBe(false);
   });
 
   test('is idempotent — seeding twice does not duplicate rows', () => {
     db = openDb(':memory:');
     seedDatabase(db);
-    const counts = {
-      departments: db.departments.all().length,
-      agents: db.agents.all().length,
-      tools: db.tools.all().length,
-    };
+    const before = { departments: db.departments.all().length, agents: db.agents.all().length };
     seedDatabase(db);
-    expect(db.departments.all().length).toBe(counts.departments);
-    expect(db.agents.all().length).toBe(counts.agents);
-    expect(db.tools.all().length).toBe(counts.tools);
-  });
-
-  test('email list reflects the real Beehiiv account, not the retired ~30k demo', () => {
-    db = openDb(':memory:');
-    seedDatabase(db);
-    const snaps = db.emailList.snapshots();
-    expect(snaps.length).toBeGreaterThan(0);
-    // Latest count is the seeded newsletter subscriber count.
-    // Bumped deliberately as the list grows.
-    expect(db.emailList.latest()?.subscribers).toBe(1850);
-    // Honest shape: the list only exists from its seeded bulk import — no
-    // pre-import history, and nowhere near the old dummy ~30k ramp.
-    expect(snaps[0].capturedAt >= '2026-05-28').toBe(true);
-    for (const s of snaps) expect(s.subscribers).toBeLessThan(6000);
-  });
-
-  test('re-seeding reconciles email history: stale dummy dropped, live snapshots kept', () => {
-    db = openDb(':memory:');
-    seedDatabase(db);
-    // an older DB still holding retired ~30k dummy history + a live Beehiiv snapshot
-    db.emailList.insertSnapshot({ capturedAt: '2026-03-14', subscribers: 25800, source: 'seed-dummy' });
-    db.emailList.insertSnapshot({ capturedAt: '2026-07-07', subscribers: 4830, source: 'beehiiv' });
-    seedDatabase(db);
-    const snaps = db.emailList.snapshots();
-    // retired dummy history is reconciled away on re-seed...
-    expect(snaps.some((s) => s.source === 'seed-dummy')).toBe(false);
-    expect(snaps.some((s) => s.subscribers > 6000)).toBe(false);
-    // ...but a real live-synced snapshot survives
-    expect(snaps.find((s) => s.capturedAt === '2026-07-07')?.source).toBe('beehiiv');
+    expect(db.departments.all().length).toBe(before.departments);
+    expect(db.agents.all().length).toBe(before.agents);
   });
 
   test('seeded data passes schema validation end to end', () => {
     db = openDb(':memory:');
     seedDatabase(db);
-    // openDb repos parse rows through Zod on the way out, so a full read
-    // of every table proves the seed data conforms to every schema.
     expect(() => {
       db.departments.all();
       db.agents.all();
-      db.tools.all();
-      db.roadmap.all();
-      db.metrics.all();
-      db.domains.all();
-      db.phases.all();
     }).not.toThrow();
-  });
-});
-
-describe('roadmap grouping', () => {
-  test('groups roadmap items by quarter in chronological order', async () => {
-    const { groupRoadmapByQuarter } = await import('@/lib/roadmap');
-    db = openDb(':memory:');
-    seedDatabase(db);
-    const grouped = groupRoadmapByQuarter(db.roadmap.all());
-    const quarters = grouped.map((g) => g.quarter);
-    expect(quarters.length).toBeGreaterThanOrEqual(3);
-    expect([...quarters].sort()).toEqual(quarters);
-    for (const group of grouped) {
-      expect(group.items.length).toBeGreaterThan(0);
-    }
   });
 });

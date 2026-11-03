@@ -1,65 +1,40 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
+import { randomUUID } from 'node:crypto';
 import { getDb } from '@/lib/data';
-import { LeadMagnetStatusSchema } from '@/lib/schemas';
+import { trakyoKey } from '@/lib/connectors/trakyo';
+import { foMode, sampleLeadMagnets } from '@/lib/fo-sample';
+import { setupHrefFor } from '@/lib/integrations-catalog';
+import { leadMagnetsView } from '@/lib/lead-magnets';
+import { LeadMagnetInputSchema, LeadMagnetStatusSchema } from '@/lib/schemas';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
 /**
- * The lead magnet register. GET lists every page we ship; POST adds one from
- * inside the OS (the Content Gen skill posts here after it deploys a page, and
- * the /content/lead-magnets form posts here by hand).
- *
- * Rows created here are stamped origin 'os' by the repo, so re-seeding the
- * database can never delete them.
+ * Lead magnets (pages/lead-magnets.md §2). GET lists them (`?status=` filters)
+ * with the derived figures; it reads SQLite only. POST registers one; the
+ * content-gen skill posts the same body (LM-4):
+ *   { name, offer?, liveUrl (https), destination: email|booking, campaign?,
+ *     status?: draft|live|paused|archived, wentLiveAt?: YYYY-MM-DD, notes? }
  */
-const CreateSchema = z.object({
-  name: z.string().min(1).max(120),
-  url: z.string().url(),
-  offer: z.string().max(400).default(''),
-  status: LeadMagnetStatusSchema.default('live'),
-  captures: z.enum(['email', 'booking', 'none']).default('email'),
-  destination: z.string().max(200).default(''),
-  source: z.string().max(300).default(''),
-  launchedAt: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/, 'launchedAt must be YYYY-MM-DD')
-    .optional(),
-  notes: z.string().max(2000).default(''),
-});
-
-/** "The Claude Trading Setup" -> "the-claude-trading-setup" */
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)/g, '')
-    .slice(0, 60);
-}
-
-export async function GET() {
-  return NextResponse.json({ leadMagnets: getDb().leadMagnets.all() });
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const rawStatus = url.searchParams.get('status');
+  const status = rawStatus ? LeadMagnetStatusSchema.safeParse(rawStatus) : null;
+  if (status && !status.success) return NextResponse.json({ error: 'status must be draft, live, paused or archived' }, { status: 400 });
+  const db = getDb();
+  const all = db.leadMagnets.all();
+  const mode = foMode(req.url, all.length === 0);
+  const source = mode === 'live' ? all : sampleLeadMagnets();
+  const magnets = status?.success ? source.filter((m) => m.status === status.data) : source;
+  const view = leadMagnetsView(source, { trakyoConfigured: mode === 'live' && Boolean(trakyoKey()), trakyoSetupHref: setupHrefFor('trakyo') });
+  return NextResponse.json({ magnets, view, mode, sample: mode !== 'live' });
 }
 
 export async function POST(req: Request) {
-  const parsed = CreateSchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  }
-  const input = parsed.data;
-  const db = getDb();
-
-  const base = slugify(input.name) || 'lead-magnet';
-  const taken = new Set(db.leadMagnets.all().map((m) => m.id));
-  let id = base;
-  for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
-
-  const row = {
-    ...input,
-    id,
-    launchedAt: input.launchedAt ?? new Date().toISOString().slice(0, 10),
-    origin: 'os' as const,
-  };
-  db.leadMagnets.insert(row);
-  return NextResponse.json({ leadMagnet: row }, { status: 201 });
+  const parsed = LeadMagnetInputSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'invalid lead magnet', issues: parsed.error.flatten() }, { status: 400 });
+  const now = new Date().toISOString();
+  const magnet = getDb().leadMagnets.insert({ ...parsed.data, id: randomUUID(), createdAt: now, updatedAt: now });
+  return NextResponse.json({ ok: true, magnet }, { status: 201 });
 }

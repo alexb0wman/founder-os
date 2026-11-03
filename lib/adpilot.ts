@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * AdPilot campaign layer: paid-media performance for the /adpilot deck.
+ * AdPilot campaign layer — paid-media performance for the /adpilot deck.
  * Reads data/adpilot-campaigns.json. Until a real ad account is connected
  * (Foreplay Lens / Meta), the file carries staged numbers on the operator's real
  * offers; the read path, schemas, and every derived metric are the
@@ -19,7 +19,7 @@ export const GeoPointSchema = z.object({
 });
 export type GeoPoint = z.infer<typeof GeoPointSchema>;
 
-/** One day of delivery: Meta insights provide this natively; the staged
+/** One day of delivery — Meta insights provide this natively; the staged
  *  file carries plausible dailies so widgets are identical either way. */
 export const DailyPointSchema = z.object({
   date: z.string(),
@@ -161,4 +161,106 @@ export function aggregateAudience(campaigns: Campaign[]): Campaign['audience'] {
     gender: merge((c) => c.audience.gender),
     placements: merge((c) => c.audience.placements),
   };
+}
+
+/** Signal de-duplication (SPEC X5) lives with the signal engine; re-exported for AdPilot callers. */
+export { dedupeSignals, type DedupedSignal, type DedupeOptions } from '@/lib/foreplay/signals';
+
+/* ── Deck helpers (SPEC S01 F6, F7, F9, F11, F24) ── */
+
+const DAY_MS = 86_400_000;
+
+/**
+ * The window the deck's numbers cover, in days (S01 F7, AC01.10). The
+ * metrics are summed over the daily series when one exists, so its length
+ * wins: the count of distinct dates across the selection. Without dailies,
+ * the inclusive span of the union of `period` ranges. Null when there is
+ * nothing to measure (no campaigns, or unparseable periods).
+ */
+export function periodDays(campaigns: Pick<Campaign, 'period' | 'daily'>[]): number | null {
+  if (campaigns.length === 0) return null;
+  const dates = new Set<string>();
+  for (const c of campaigns) for (const d of c.daily ?? []) dates.add(d.date);
+  if (dates.size > 0) return dates.size;
+  let from = Infinity;
+  let to = -Infinity;
+  for (const c of campaigns) {
+    const f = Date.parse(`${c.period.from}T00:00:00Z`);
+    const t = Date.parse(`${c.period.to}T00:00:00Z`);
+    if (!Number.isFinite(f) || !Number.isFinite(t)) continue;
+    from = Math.min(from, f);
+    to = Math.max(to, t);
+  }
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+  return Math.round((to - from) / DAY_MS) + 1;
+}
+
+export type AlignedRow<T> = { item: T; cells: (DailyPoint | null)[] };
+
+/**
+ * Line every campaign's dailies up on one date axis (S01 §8 edge 5): the
+ * sorted union of dates, each row holding its point for that date or null.
+ * Rows align by date key, never by index, so campaigns with different
+ * ranges still read in the same column.
+ */
+export function alignDaily<T extends { daily?: DailyPoint[] }>(items: T[]): { dates: string[]; rows: AlignedRow<T>[] } {
+  const all = new Set<string>();
+  for (const it of items) for (const d of it.daily ?? []) all.add(d.date);
+  const dates = [...all].sort();
+  const rows = items.map((item) => {
+    const byDate = new Map((item.daily ?? []).map((d) => [d.date, d]));
+    return { item, cells: dates.map((d) => byDate.get(d) ?? null) };
+  });
+  return { dates, rows };
+}
+
+/** Short relative time against an explicit `now`, so server and client render the same text. */
+export function relativeAgo(iso: string | null, now: number): string {
+  if (!iso) return 'never';
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return 'never';
+  const mins = Math.max(0, Math.round((now - t) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  if (mins < 60 * 36) return `${Math.round(mins / 60)}h ago`;
+  return `${Math.round(mins / 1440)}d ago`;
+}
+
+/** A sync older than this reads as stale on the status chip (S01 F6). */
+export const SYNC_STALE_MS = 48 * 3_600_000;
+
+export function isStale(iso: string | null, now: number, maxAgeMs = SYNC_STALE_MS): boolean {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) && now - t > maxAgeMs;
+}
+
+/**
+ * Normalise what someone typed into the Track-brand box into a bare domain
+ * (S01 F24): strips scheme, `www.`, path, query and port; lower-cases.
+ * Null when the result is not domain-shaped, so nothing is POSTed.
+ */
+export function parseBrandDomain(input: string): string | null {
+  let s = input.trim().toLowerCase();
+  if (!s) return null;
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//, '').replace(/^www\./, '');
+  s = s.split(/[/?#]/)[0].replace(/:\d+$/, '');
+  if (s.length < 4 || s.length > 120) return null;
+  return /^([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/.test(s) ? s : null;
+}
+
+/** Roving focus for a row of options (rail pills, tabs): the next index for a key, or null. */
+export function rovingIndex(key: string, current: number, count: number): number | null {
+  if (count <= 0) return null;
+  if (key === 'ArrowRight' || key === 'ArrowDown') return (current + 1) % count;
+  if (key === 'ArrowLeft' || key === 'ArrowUp') return (current - 1 + count) % count;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
+}
+
+/** Signal-strength alpha for a delivery dot / legend dot (0 = quiet day). */
+export function deliveryAlpha(t: number): number {
+  if (!(t > 0.02)) return 0;
+  return Math.round((0.1 + Math.pow(Math.min(t, 1), 1.7) * 0.88) * 100) / 100;
 }

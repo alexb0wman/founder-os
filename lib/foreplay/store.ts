@@ -2,9 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { AnalyticsDay, ForeplayAd, ForeplayUsage, SpyderBrand } from '@/lib/foreplay/client';
 import type { Signal } from '@/lib/foreplay/signals';
+import { dataPath } from '@/lib/paths';
 
 /**
- * Adscout's local snapshot store: plain JSON under data/ad-intel/. Everything
+ * Adscout's local snapshot store — plain JSON under data/ad-intel/. Everything
  * downstream (signals, dossiers, the future /ads page) reads FROM here; the
  * Foreplay API is touched only by sync cycles and explicit user searches, so
  * the 10k/mo credit budget is spent once per fact, not once per render.
@@ -12,7 +13,7 @@ import type { Signal } from '@/lib/foreplay/signals';
  */
 
 export function storeDir(): string {
-  return process.env.ADSCOUT_STORE_DIR ?? path.join(process.cwd(), 'data', 'ad-intel');
+  return process.env.ADSCOUT_STORE_DIR ?? dataPath('ad-intel');
 }
 
 function fileFor(name: string): string {
@@ -32,7 +33,7 @@ function writeJson(name: string, value: unknown): void {
   fs.writeFileSync(fileFor(name), JSON.stringify(value, null, 2) + '\n');
 }
 
-/** Brand ids become filenames: keep them to a safe charset. */
+/** Brand ids become filenames — keep them to a safe charset. */
 function brandFile(prefix: string, brandId: string): string {
   return `${prefix}-${brandId.replace(/[^A-Za-z0-9_-]/g, '_')}.json`;
 }

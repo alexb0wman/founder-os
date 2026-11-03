@@ -1,22 +1,19 @@
-import { GATED, connected as gatedConnected } from '@/lib/connectors/demo-status';
 import { CRED_FILES, resolveCred } from '@/lib/creds';
 import type { ConnectorStatus } from '@/lib/connectors/types';
 
 export async function miroStatus(): Promise<ConnectorStatus> {
-  if (GATED) return gatedConnected('miro', 'Miro', 'creative', 'boards · synced');
-  const token = resolveCred('MIRO_ACCESS_TOKEN', [CRED_FILES.brainAgent]);
+  const token = resolveCred('MIRO_ACCESS_TOKEN', [CRED_FILES.agentsEnv]);
   if (!token) {
     return {
       id: 'miro',
       name: 'Miro',
       kind: 'creative',
       state: 'not_configured',
-      detail: 'MIRO_ACCESS_TOKEN not found in env or brain-agent/.env.agents.',
+      detail: 'MIRO_ACCESS_TOKEN not found in env or knowledge/.env.agents.',
     };
   }
   try {
     const res = await fetch('https://api.miro.com/v2/boards?limit=10', {
-      cache: 'no-store',
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(4000),
     });

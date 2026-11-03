@@ -2,7 +2,6 @@ import { describe, expect, test } from 'vitest';
 import {
   AgentSchema,
   DepartmentSchema,
-  DomainSchema,
   MetricSchema,
   PhaseSchema,
   RoadmapItemSchema,
@@ -73,12 +72,11 @@ describe('RoadmapItemSchema', () => {
   test('accepts a valid roadmap item with null department', () => {
     const item = {
       id: 'rm-1',
-      title: 'Ship FOUNDER OS v1',
+      title: 'Ship GLADOS v1',
       quarter: '2026-Q2',
       status: 'now',
       departmentId: null,
       description: 'Live web app on port 4100.',
-      phaseId: 'phase-1',
     };
     expect(RoadmapItemSchema.parse(item)).toEqual(item);
   });
@@ -124,19 +122,6 @@ describe('MetricSchema', () => {
       period: '30d',
     };
     expect(MetricSchema.parse(metric)).toEqual(metric);
-  });
-});
-
-describe('DomainSchema', () => {
-  test('accepts a business reference model domain with items', () => {
-    const domain = {
-      id: 'brm-1',
-      number: 1,
-      title: 'Company Leadership',
-      color: '#8b5cf6',
-      items: ['Vision & strategy', 'Quarterly planning', 'Decision log'],
-    };
-    expect(DomainSchema.parse(domain)).toEqual(domain);
   });
 });
 

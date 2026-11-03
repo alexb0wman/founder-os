@@ -1,9 +1,9 @@
 import type { Agent } from '@/lib/schemas';
 
 /**
- * The content-creation crew: the Marketing/Growth pillar, where the content
- * agent (`social-agent`) and its Zernio publisher + creative workers live. The
- * lead comes first, then the workers alphabetically.
+ * The content pillar: Marketing/Growth, home of the @yourhandle content
+ * engine (lead-run; agents here are the briefing lanes). The lead comes
+ * first, then the workers alphabetically.
  */
 export const CONTENT_DEPT_ID = 'dept-marketing-growth';
 

@@ -125,7 +125,7 @@ describe('POST /api/workflows/draft (CLI mocked)', () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.unavailable).toBe(true);
-    expect(body.error).toMatch(/unavailable: build manually/);
+    expect(body.error).toMatch(/unavailable — build manually/);
   });
 
   test('rejects an empty prompt with 400 before ever touching the CLI', async () => {

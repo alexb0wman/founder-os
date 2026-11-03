@@ -1,31 +1,29 @@
+import type { ReactNode } from 'react';
 import { allConnectorStatuses } from '@/lib/connectors';
 import { readEnvLocal } from '@/lib/creds';
-import { oauthReadiness } from '@/lib/oauth/store';
-import { connectionCatalog, integrationsByCategory, type CatalogEntry } from '@/lib/integrations-catalog';
-import { integrationsVolume } from '@/lib/integrations-volume';
-import { Slab, SlabTitle, SlabCard, BigStat, Chip, MeterStack, InsightCard, PILL } from '@/components/slab';
-import { DotMatrix } from '@/components/slab-charts';
+import { connectionCatalog, integrationsByCategory, popularNotConnected, type CatalogEntry } from '@/lib/integrations-catalog';
+import { listKeyStatuses } from '@/lib/keys';
+import { getAppearance } from '@/lib/appearance-server';
+import { treeFor } from '@/lib/appearance';
+import { GButton, GPage, GSectionHeader } from '@/components/g';
+import { ConnectionCardG, ConnSection } from '@/components/integrations/ConnectionsG';
+import { CategoryG } from '@/components/integrations/CategoryG';
+import { ApiKeysG } from '@/components/integrations/ApiKeysG';
+import { PageHeader } from '@/components/PageHeader';
 import { ApiKeys } from '@/components/ApiKeys';
+import { SectionHead } from '@/components/terminal';
 import { ConnectionCard } from '@/components/ConnectionCard';
-import { IntegrationBrowser } from '@/components/IntegrationBrowser';
+import { IntegrationCategory } from '@/components/IntegrationCategory';
+import { IntegrationBrowser, type BrowserItem } from '@/components/integrations/IntegrationBrowser';
+import { browseState } from '@/lib/integration-browser';
 
 export const dynamic = 'force-dynamic';
 
-const GRID = 'grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4';
+const GRID = 'grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4';
 
-/**
- * The Connections board. 2026-09-24: it wears the Brand Deals slab
- * (components/slab). Every number in the hero and second row comes from
- * lib/integrations-volume, fed with the same live connector checks and
- * catalog the tiles below render; the tiles, connect flows, category
- * accordion and key editor are unchanged.
- */
 export default async function ConnectionsPage() {
   const statuses = await allConnectorStatuses();
-  const env = readEnvLocal();
-  const catalog = connectionCatalog(statuses, env);
-  // Null for every tile whose provider has no usable authorization-code flow.
-  const oauthFor = (slug: string) => oauthReadiness(slug, env);
+  const catalog = connectionCatalog(statuses, readEnvLocal());
   const detailByConnector = new Map(statuses.map((s) => [s.id, s.detail]));
   const guidanceFor = (entry: CatalogEntry) =>
     entry.connectorId ? detailByConnector.get(entry.connectorId) : undefined;
@@ -34,109 +32,109 @@ export default async function ConnectionsPage() {
   const connected = catalog.filter((c) => c.connected);
   const popular = catalog.filter((c) => c.popular);
   const categories = [...integrationsByCategory().entries()];
-  const v = integrationsVolume({ statuses, catalog });
+  const categoryNames = categories.map(([c]) => c as string);
+  // F11 (founderos-ui): the browser's facts per tool, each with its tree's card.
+  const browseItems = (render: (entry: CatalogEntry) => ReactNode): BrowserItem[] =>
+    catalog.map((c) => ({ slug: c.slug, name: c.name, tagline: c.tagline, category: c.category, state: browseState(c), card: render(c) }));
 
-  const card = (entry: CatalogEntry) => (
-    <ConnectionCard key={entry.slug} entry={entry} guidance={guidanceFor(entry)} oauth={oauthFor(entry.slug)} />
-  );
+  // Two trees, one fetch (glados-ui SPEC X5, S05 F05.70 to F05.73).
+  if (treeFor(getAppearance(), '/integrations') === 'glados') {
+    const popularOpen = popularNotConnected(catalog);
+    const slots = listKeyStatuses();
+    const set = slots.filter((s) => s.present).length;
+    const card = (entry: CatalogEntry) => <ConnectionCardG key={entry.slug} entry={entry} guidance={guidanceFor(entry)} />;
+    return (
+      <GPage className="kg-page">
+        <GSectionHeader
+          size="page"
+          title="Connections"
+          caption="Every tool this OS can reach, with its live state."
+          action={
+            <GButton variant="sm" href="#keys-head" title={`${set} of ${slots.length} key slots hold a value in .env.local on this host`}>
+              {set} of {slots.length} keys set
+            </GButton>
+          }
+        />
+        {connected.length > 0 && (
+          <ConnSection id="conn-connected" title="Your connected tools" caption={`${connected.length} reporting live`}>
+            <div className="kg-grid-3">{connected.map(card)}</div>
+          </ConnSection>
+        )}
+        {popularOpen.length > 0 && (
+          <ConnSection id="conn-popular" title="Popular" caption="Not connected yet">
+            <div className="kg-grid-3">{popularOpen.map(card)}</div>
+          </ConnSection>
+        )}
+        <ConnSection id="conn-browse" title="Browse by category" caption={`${categories.length} categories`}>
+          <IntegrationBrowser ui="glados" items={browseItems(card)} categories={categoryNames} gridClassName="kg-grid-3">
+            <div className="kg-stack-sm">
+              {categories.map(([category, tools]) => (
+                <CategoryG key={category} label={category} count={tools.length} slugs={tools.map((t) => t.slug)}>
+                  <div className="kg-grid-3">{tools.map((tool) => card(byId.get(tool.slug) as CatalogEntry))}</div>
+                </CategoryG>
+              ))}
+            </div>
+          </IntegrationBrowser>
+        </ConnSection>
+        <ApiKeysG />
+      </GPage>
+    );
+  }
 
   return (
-    <Slab>
-      <SlabTitle
-        eyebrow="connections"
-        title="Connections"
-        meta={`${catalog.length} tools · ${v.counts.total} connector checks · live status, never a stored key alone`}
-        right={
-          <>
-            <Chip tone={v.counts.error ? 'err' : 'ok'}>
-              {v.counts.connected} live{v.counts.error ? ` · ${v.counts.error} erroring` : ''}
-            </Chip>
-            <a href="#api-keys" className={PILL}>
-              API keys
-            </a>
-          </>
-        }
-      />
+    <div>
+      <PageHeader eyebrow="Live connections board" title="Connections" />
 
-      {/* Hero row, Brand Deals' shape: what is live + the volume card */}
-      <div className="grid grid-cols-[2fr_1fr] gap-6 max-[1200px]:grid-cols-1">
-        <SlabCard i={1} title="Your connected tools" sub={`${connected.length} of ${catalog.length}`}>
-          <div className="px-6 pb-6 pt-3">
-            <BigStat size={30} value={connected.length} caption="catalog tools whose connector answered on this load" />
-            <div className="mt-5 border-t border-os-border pt-5">
-              {connected.length > 0 ? (
-                <div className={GRID}>{connected.map(card)}</div>
-              ) : (
-                <div className="text-[12.5px] text-os-dim">Nothing is connected yet. Pick a tool below and connect it.</div>
-              )}
-            </div>
+      {/* Your connected tools — driven by real connector status */}
+      {connected.length > 0 && (
+        <section className="mb-8">
+          <SectionHead label="Your connected tools" count={connected.length} />
+          <div className={GRID}>
+            {connected.map((entry) => (
+              <ConnectionCard key={entry.slug} entry={entry} guidance={guidanceFor(entry)} />
+            ))}
           </div>
-        </SlabCard>
-
-        <SlabCard i={2} title="Connection Volume" className="flex flex-col">
-          <div className="flex flex-1 flex-col px-6 pb-6 pt-3">
-            <BigStat value={v.headline} chips={v.chips} caption={v.caption} />
-            <MeterStack meters={v.meters} foot={v.foot} empty="no connector checks ran" />
-          </div>
-        </SlabCard>
-      </div>
-
-      {/* Second row: by category, connector health, THE gradient card */}
-      <div className="mt-6 grid grid-cols-3 gap-6 max-[1200px]:grid-cols-1">
-        <SlabCard i={3} title="By Category" sub="connected tools">
-          <div className="flex flex-col gap-5 px-6 pb-6 pt-3">
-            <BigStat
-              size={30}
-              display={v.topCategory ? v.topCategory.name : 'none'}
-              caption={v.topCategory ? `most connected · ${v.topCategory.count} live` : 'no category has a live tool'}
-            />
-            <DotMatrix cols={v.byCategory} hue="var(--ramp-1)" />
-          </div>
-        </SlabCard>
-
-        <SlabCard i={4} title="Connector Health" sub="this load">
-          <div className="flex flex-col gap-5 px-6 pb-6 pt-3">
-            <BigStat size={30} value={v.counts.total} caption="connector checks, live · unset · error" />
-            <DotMatrix cols={v.health} hue="var(--ok)" />
-          </div>
-        </SlabCard>
-
-        <InsightCard
-          i={5}
-          badge="Needs you"
-          value={v.insight.value}
-          headline={v.insight.headline}
-          body={v.insight.body}
-          frac={v.insight.frac}
-        />
-      </div>
+        </section>
+      )}
 
       {/* Popular */}
-      <SlabCard i={6} title="Popular" sub={`${popular.length}`} className="mt-6">
-        <div className="px-6 pb-6 pt-4">
-          <div className={GRID}>{popular.map(card)}</div>
+      <section className="mb-8">
+        <SectionHead label="Popular" count={popular.length} />
+        <div className={GRID}>
+          {popular.map((entry) => (
+            <ConnectionCard key={entry.slug} entry={entry} guidance={guidanceFor(entry)} />
+          ))}
         </div>
-      </SlabCard>
+      </section>
 
-      {/* Browse by category: filter pills over the collapsible categories */}
-      <SlabCard i={7} title="Browse by category" sub={`${categories.length}`} className="mt-6">
-        <div className="px-6 pb-6 pt-4">
-          <IntegrationBrowser
-            categories={categories.map(([category, tools]) => ({
-              label: category,
-              count: tools.length,
-              connected: tools.filter((t) => byId.get(t.slug)?.connected).length,
-              grid: <div className={GRID}>{tools.map((tool) => card(byId.get(tool.slug) as CatalogEntry))}</div>,
-            }))}
-          />
+      {/* Browse by category — collapsible */}
+      <section className="mb-8">
+        <SectionHead label="Browse by category" count={categories.length} />
+        <IntegrationBrowser
+          ui="classic"
+          items={browseItems((entry) => <ConnectionCard key={entry.slug} entry={entry} guidance={guidanceFor(entry)} />)}
+          categories={categoryNames}
+          gridClassName={GRID}
+        >
+        <div className="flex flex-col gap-3.5">
+          {categories.map(([category, tools], idx) => (
+            <IntegrationCategory key={category} label={category} count={tools.length} defaultOpen={idx === 0} slugs={tools.map((t) => t.slug)}>
+              <div className={GRID}>
+                {tools.map((tool) => (
+                  <ConnectionCard
+                    key={tool.slug}
+                    entry={byId.get(tool.slug) as CatalogEntry}
+                    guidance={guidanceFor(byId.get(tool.slug) as CatalogEntry)}
+                  />
+                ))}
+              </div>
+            </IntegrationCategory>
+          ))}
         </div>
-      </SlabCard>
+        </IntegrationBrowser>
+      </section>
 
-      <SlabCard i={8} className="mt-6">
-        <div id="api-keys" className="scroll-mt-24 px-6 pb-6 pt-5">
-          <ApiKeys />
-        </div>
-      </SlabCard>
-    </Slab>
+      <ApiKeys />
+    </div>
   );
 }

@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { seedDatabase } from '@/lib/seed';
+import { realAgents } from '@/lib/agents/real';
 import { buildKnowledgeGraph } from '@/lib/knowledge-graph';
 import { ACTION_LENSES, ALL_LENSES, ENTITY_LENSES, FUNCTION_LENSES, lensNodeSet, type LensContext } from '@/lib/graph-lens';
 
 function contextFromSeed(): LensContext {
-  const db: FounderDb = openDb(':memory:');
+  const db: GladosDb = openDb(':memory:');
   seedDatabase(db);
   const graph = buildKnowledgeGraph(db.agents.all(), db.departments.all(), db.people.all(), db.sopTasks.all());
   // dept resolver mirroring the component's teamForFocus: worker → its dept
@@ -17,25 +18,23 @@ function contextFromSeed(): LensContext {
 
 const ctx = contextFromSeed();
 
-describe('graph lenses — Alex taxonomy (2026-07-12)', () => {
+describe('graph lenses (roster realigned 2026-08-19)', () => {
   test('the requested categories all exist', () => {
     expect(ENTITY_LENSES.map((l) => l.label)).toEqual([
       'All people', 'Sub-agents', 'Tools', 'Workflows', 'SOPs', 'Projects', 'Teams', 'Departments',
     ]);
-    expect(FUNCTION_LENSES.map((l) => l.label)).toContain('Core');
-    expect(FUNCTION_LENSES.map((l) => l.label)).toContain('Enabling');
-    expect(FUNCTION_LENSES.map((l) => l.label)).toContain('Vantage team');
-    expect(FUNCTION_LENSES.map((l) => l.label)).toContain('Launchpad Cohort team');
-    expect(ACTION_LENSES).toHaveLength(11);
+    expect(FUNCTION_LENSES.map((l) => l.label)).toEqual(['Core', 'Enabling']);
+    expect(ACTION_LENSES).toHaveLength(9);
     expect(new Set(ALL_LENSES.map((l) => l.id)).size).toBe(ALL_LENSES.length);
   });
 
-  test('entity lenses match by node kind against the real seeded graph', () => {
-    expect(lensNodeSet('ent-people', ctx).size).toBe(5); // seeded roster
-    expect(lensNodeSet('ent-subagents', ctx).size).toBe(32); // -notion-sync retired, +brand-deal and newsletter agents
-    expect(lensNodeSet('ent-departments', ctx).size).toBe(6);
-    expect(lensNodeSet('ent-sops', ctx).size).toBeGreaterThan(20);
-    expect(lensNodeSet('ent-tools', ctx).size).toBeGreaterThan(20);
+  test('entity lenses match by node kind against the seeded graph (blank install)', () => {
+    expect(lensNodeSet('ent-people', ctx).size).toBe(0);
+    expect(lensNodeSet('ent-subagents', ctx).size).toBe(realAgents.length);
+    // A pillar with no agents projects no team node yet, so this is ≥ not =.
+    expect(lensNodeSet('ent-departments', ctx).size).toBeGreaterThanOrEqual(5);
+    expect(lensNodeSet('ent-sops', ctx).size).toBe(0);
+    expect(lensNodeSet('ent-tools', ctx).size).toBe(0);
   });
 
   test('workflows and projects are honestly empty until modeled', () => {
@@ -54,12 +53,9 @@ describe('graph lenses — Alex taxonomy (2026-07-12)', () => {
     expect(core.has('emp:sales-agent')).toBe(true);
   });
 
-  test('venture team lenses light their rosters', () => {
-    const van = lensNodeSet('fn-vantage', ctx);
-    expect(van.has('emp:vantage-sales')).toBe(true);
-    expect(van.has('emp:vantage-paykit')).toBe(true);
-    const lc = lensNodeSet('fn-launchpad-cohort', ctx);
-    expect(lc.has('emp:launchpad-cohort-sales')).toBe(true);
+  test('venture team lenses are empty until ventures are configured', () => {
+    expect(lensNodeSet('fn-anything', ctx).size).toBe(0);
+    expect(lensNodeSet('ent-teams', ctx).size).toBe(0);
   });
 
   test('every action lens resolves to real seeded agents', () => {
@@ -71,10 +67,10 @@ describe('graph lenses — Alex taxonomy (2026-07-12)', () => {
   });
 
   test('specific action mappings hold', () => {
-    expect(lensNodeSet('act-ad-creation', ctx).has('emp:adsmith-creative')).toBe(true);
-    expect(lensNodeSet('act-lead-generation', ctx).has('emp:sales-agent')).toBe(true);
-    expect(lensNodeSet('act-social-scheduler', ctx).has('emp:postly-publisher')).toBe(true);
-    expect(lensNodeSet('act-ai-visuals', ctx).has('emp:renderly-creative')).toBe(true);
+    expect(lensNodeSet('act-deal-triage', ctx).has('emp:draft-approval-bot')).toBe(true);
+    expect(lensNodeSet('act-pipeline', ctx).has('emp:sales-agent')).toBe(true);
+    expect(lensNodeSet('act-sending', ctx).has('emp:gsend-sender')).toBe(true);
+    expect(lensNodeSet('act-retrieval', ctx).has('emp:data-agent')).toBe(true);
   });
 
   test('unknown lens returns an empty set, never throws', () => {

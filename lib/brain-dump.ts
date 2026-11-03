@@ -6,15 +6,15 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { brainStoreDir } from '@/lib/stores';
 import type { CaptureInput, CaptureOutcome } from '@/lib/connectors/gbrain';
 
-const DEFAULT_STORE = process.env.GBRAIN_STORE ?? path.join(os.homedir(), 'brain-agent', 'brain-store');
 
 export type BrainDumpInput = {
   text: string;
   title?: string;
   folder: string; // top-level brain-store folder, e.g. 'inbox' | 'ideas'
-  tags: string[]; // venture tags etc. — #vantage, #launchpad-cohort …
+  tags: string[]; // venture tags etc. — #acme, #workshop …
 };
 
 export type BrainDumpResult = { relPath: string; title: string };
@@ -31,7 +31,7 @@ export function slugifyTitle(title: string): string {
   return slug || 'untitled';
 }
 
-export function writeBrainDump(input: BrainDumpInput, storePath: string = DEFAULT_STORE): BrainDumpResult {
+export function writeBrainDump(input: BrainDumpInput, storePath: string = brainStoreDir()): BrainDumpResult {
   const text = input.text.trim();
   if (!text) throw new Error('brain dump is empty');
   if (!/^[a-z0-9-]+$/i.test(input.folder)) {
@@ -52,7 +52,7 @@ export function writeBrainDump(input: BrainDumpInput, storePath: string = DEFAUL
   const body = [
     '---',
     `created: ${new Date().toISOString()}`,
-    'source: founder-os-brain-dump',
+    'source: glados-brain-dump',
     `tags: [${tags.join(', ')}]`,
     '---',
     '',

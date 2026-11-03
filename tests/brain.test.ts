@@ -6,12 +6,9 @@ afterEach(() => {
 });
 
 describe('G Brain adapter', () => {
-  // The default moved to 'federated' on 2026-08-25: both stores at once,
-  // governed answers first, degrading to gbrain alone wherever the engine is
-  // not running. gbrain stays selectable on its own.
-  test('defaults to the federated brain, which falls back to gbrain', () => {
+  test('defaults to the real gbrain provider', () => {
     const brain = getBrainProvider();
-    expect(brain.name).toBe('federated');
+    expect(brain.name).toBe('gbrain');
   });
 
   test('falls back to stub when BRAIN_PROVIDER=stub', () => {
@@ -32,6 +29,6 @@ describe('G Brain adapter', () => {
   test('stub search returns an empty result set, never throws', async () => {
     process.env.BRAIN_PROVIDER = 'stub';
     const brain = getBrainProvider();
-    await expect(brain.search('launchpad cohort')).resolves.toEqual([]);
+    await expect(brain.search('workshop')).resolves.toEqual([]);
   });
 });

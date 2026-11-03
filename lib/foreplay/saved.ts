@@ -5,15 +5,15 @@ import { storeDir } from '@/lib/foreplay/store';
 import type { WallAd } from '@/lib/foreplay/wall';
 
 /**
- * Saved ads: the operator's curated swipe file inside AdPilot. Each save keeps a
+ * Saved ads — the operator's curated swipe file inside AdPilot. Each save keeps a
  * full WallAd snapshot (Foreplay CDN URLs are stable, and a saved ad must
  * survive the source brand leaving the watchlist). Saves are one of the two
- * legitimate manual affordances (with the watchlist): everything else is
+ * legitimate manual affordances (with the watchlist) — everything else is
  * ingestion-owned. Saves also teach the For-you feed (lib/foreplay/personal).
  */
 
 const SavedAdSchema = z.object({
-  ad: z.record(z.string(), z.unknown()), // WallAd snapshot: validated at save time by the route
+  ad: z.record(z.string(), z.unknown()), // WallAd snapshot — validated at save time by the route
   savedAt: z.string(),
 });
 export type SavedAd = { ad: WallAd; savedAt: string };

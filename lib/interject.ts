@@ -1,72 +1,57 @@
 /**
- * Interject — the home composer's no-LLM router. Free text becomes one of:
- *   task  → a REAL Paperclip board issue (the Conductor triages it)
- *   agent → also a board issue, with the "tell/ask <agent>" phrasing kept as
- *           the title so the Conductor relays instead of triaging
- *   note  → a G-Brain inbox page (inbox/YYYY-MM-DD-note)
- * Pattern order is deliberate: the task patterns win over the agent ones.
+ * The Home interject composer's router (pages/feature-additions.md F2, ported
+ * in spirit from FounderOS `pages/console/interject.go`). Rule-based, no LLM:
+ *
+ *   "tell <agent> …" / "ask <agent> …" / "@<agent> …"  → relay: a task assigned to that agent
+ *   "note …" / "note: …" / "remember …"                 → note: captured to the Optimal Engine inbox
+ *   anything else ("todo …" optional)                   → task: one of the operator's own tasks
+ *
+ * An agent is matched by id or by name (case-insensitive, longest name
+ * first, so "Daily Briefing" wins over "Daily"). An unknown agent after
+ * "tell" falls back to a plain task rather than guessing.
  */
+export type InterjectAgent = { id: string; name: string };
 
-export type InterjectRoute = 'task' | 'agent' | 'note';
+export type InterjectRoute =
+  | { kind: 'task'; title: string; detail: string }
+  | { kind: 'relay'; agentId: string; agentName: string; title: string; detail: string }
+  | { kind: 'note'; text: string };
 
-export type InterjectReceipt = {
-  ok: boolean;
-  route: InterjectRoute;
-  ref?: string | null;
-  url?: string | null;
-  slug?: string;
-  error?: string;
-};
+const TITLE_MAX = 120;
 
-export interface InterjectDeps {
-  createTask(title: string, description: string): Promise<{ ref: string | null; url: string | null }>;
-  captureNote(input: { text: string; title: string; slug: string }): Promise<
-    { ok: true; slug: string } | { ok: false; error: string }
-  >;
+function titleOf(text: string): { title: string; detail: string } {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= TITLE_MAX) return { title: flat, detail: text.trim() === flat ? '' : text.trim() };
+  return { title: `${flat.slice(0, TITLE_MAX - 1)}…`, detail: text.trim() };
 }
 
-const TASK_RE = /^task[: ]|\b(todo|task)\b/i;
-const AGENT_RE = /^(tell|ask)\s+\w+/i;
+export function routeInterject(raw: string, agents: InterjectAgent[]): InterjectRoute | null {
+  const text = raw.trim();
+  if (!text) return null;
 
-export function classifyInterject(text: string): InterjectRoute {
-  if (TASK_RE.test(text)) return 'task';
-  if (AGENT_RE.test(text)) return 'agent';
-  return 'note';
-}
+  const note = text.match(/^(?:note|remember)\s*:?\s+([\s\S]+)$/i);
+  if (note) return { kind: 'note', text: note[1].trim() };
 
-/** First line, minus any leading task:/todo: prefix, clamped for a board title. */
-function taskTitle(text: string): string {
-  const first = text.split('\n')[0].replace(/^\s*(task|todo)\s*[:\-]\s*/i, '').trim();
-  return (first || text.trim()).slice(0, 120);
-}
-
-export async function performInterject(
-  text: string,
-  route: InterjectRoute | undefined,
-  deps: InterjectDeps,
-  now: Date = new Date(),
-): Promise<InterjectReceipt> {
-  const resolved = route ?? classifyInterject(text);
-
-  if (resolved === 'note') {
-    const day = now.toISOString().slice(0, 10);
-    const outcome = await deps.captureNote({
-      text,
-      title: `Interject ${day}`,
-      slug: `inbox/${day}-note`,
-    });
-    return outcome.ok
-      ? { ok: true, route: 'note', slug: outcome.slug }
-      : { ok: false, route: 'note', error: outcome.error };
+  const relay = text.match(/^(?:(?:tell|ask)\s+|@)([\s\S]+)$/i);
+  if (relay) {
+    const rest = relay[1];
+    const lower = rest.toLowerCase();
+    const candidates = agents
+      .flatMap((a) => [a.name, a.id].map((label) => ({ a, label: label.toLowerCase() })))
+      .sort((x, y) => y.label.length - x.label.length);
+    for (const { a, label } of candidates) {
+      if (!label || !lower.startsWith(label)) continue;
+      const after = rest.slice(label.length);
+      if (after && !/^[\s,:;.-]/.test(after)) continue; // "Daily" must not match "Dailyx"
+      const body = after.replace(/^[\s,:;.-]+(?:to\s+)?/i, '').trim();
+      if (!body) return null;
+      return { kind: 'relay', agentId: a.id, agentName: a.name, ...titleOf(body) };
+    }
   }
 
-  // task and agent both land on the board; agent keeps the relay phrasing.
-  const title = resolved === 'agent' ? text.split('\n')[0].trim().slice(0, 120) : taskTitle(text);
-  const description = `${text}\n\n— interjected from the OS home (route: ${resolved})`;
-  try {
-    const created = await deps.createTask(title, description);
-    return { ok: true, route: resolved, ref: created.ref, url: created.url };
-  } catch (err) {
-    return { ok: false, route: resolved, error: err instanceof Error ? err.message : String(err) };
-  }
+  const todo = text.match(/^(?:todo|task)\s*:?\s+([\s\S]+)$/i);
+  return { kind: 'task', ...titleOf(todo ? todo[1] : text) };
 }
+
+/** How long Undo stays offered after an interject (the toast's window). */
+export const INTERJECT_UNDO_MS = 10_000;

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { paperclipCockpitThread, postCockpitMessage } from '@/lib/connectors/paperclip';
+import { paperclipCockpitThread, postCockpitMessage } from '@/founderos/lib/connectors/paperclip';
 
 export const dynamic = 'force-dynamic';
 

@@ -1,6 +1,9 @@
 import { getDb } from '@/lib/data';
 import { compileBlueprint } from '@/lib/blueprint/compile';
 import { BlueprintCanvasLazy } from '@/components/blueprint/BlueprintCanvasLazy';
+import { GStyleProvider } from '@/components/system-g/style-context';
+import { getAppearance } from '@/lib/appearance-server';
+import { treeFor } from '@/lib/appearance';
 
 export const dynamic = 'force-dynamic';
 
@@ -16,7 +19,7 @@ function relativeTime(iso: string): string {
 }
 
 /**
- * Blueprint: the system, drawn from itself. compileBlueprint assembles
+ * Blueprint — the system, drawn from itself. compileBlueprint assembles
  * the graph from the live registries on every request; the workspace reads
  * that graph as machines → groups → things, so the subline's counts and the
  * map itself genuinely change when the system does.
@@ -25,5 +28,16 @@ export default async function BlueprintPage() {
   const graph = await compileBlueprint(getDb());
   const count = (kind: string) => graph.nodes.filter((n) => n.kind === kind).length;
   const subline = `${graph.nodes.length} components · ${count('agent')} agents · ${count('daemon')} daemons · ${count('host')} machines · compiled ${relativeTime(graph.compiledAt)}`;
+  // Two trees over one workspace (glados-ui SPEC X5, S05 F05.50 to F05.55): under GladOS the same
+  // workspace renders kit controls (style context) and reads --g-* inside .kg-blueprint.
+  if (treeFor(getAppearance(), '/blueprint') === 'glados') {
+    return (
+      <div className="kg-blueprint">
+        <GStyleProvider>
+          <BlueprintCanvasLazy graph={graph} subline={subline} />
+        </GStyleProvider>
+      </div>
+    );
+  }
   return <BlueprintCanvasLazy graph={graph} subline={subline} />;
 }

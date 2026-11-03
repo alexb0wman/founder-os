@@ -1,20 +1,20 @@
 'use client';
 
 /**
- * The G-Brain radial's camera, extracted for reuse: hover leans
+ * The Optimal Engine radial's camera, extracted for reuse (2026-08-24): hover leans
  * the scene toward the cursor (eased micro-zoom), trackpad pinch zooms at the
  * cursor, two-finger scroll pans, double-click resets. Attach the returned
  * refs to an <svg> (with a centered viewBox) and a wrapper <g>; everything is
  * written straight to the transform attribute from a rAF loop, so React never
  * re-renders for camera motion. Honors prefers-reduced-motion.
  *
- * Optional programmatic target (additive): callers can also drive
- * the camera in code via the returned `setTarget({x, y, s})`: e.g. Skills'
+ * Optional programmatic target (2026-09-01, additive): callers can also drive
+ * the camera in code via the returned `setTarget({x, y, s})` — e.g. Skills'
  * deep-zoom into a cluster. It writes straight into the same `user` state the
  * mouse/wheel handlers drive, so the existing rAF loop eases toward it with
  * no separate animation path; `setTarget(null)` resets to identity, same as
  * a double-click. Existing callers that only destructure `{ svgRef, camGRef }`
- * (G-Brain, KnowledgeCanvas) are unaffected: this is a new return key only.
+ * (Optimal Engine, KnowledgeCanvas) are unaffected — this is a new return key only.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -23,7 +23,7 @@ export type CameraTarget = { x: number; y: number; s: number };
 
 export function useSvgCamera(viewBoxSpan: number, enabled = true, microZoom = 1.13, wheel = true) {
   // wheel=false keeps the hover glide but lets the page scroll through the
-  // scene: the inline-embed contract (G-Brain set it, Skills follows it).
+  // scene — the inline-embed contract (Optimal Engine set it, Skills follows it).
   // viewBoxSpan is the fallback when the element has no viewBox; the hook
   // reads the real one per event so non-square scenes anchor correctly.
   const svgRef = useRef<SVGSVGElement>(null);
@@ -65,8 +65,8 @@ export function useSvgCamera(viewBoxSpan: number, enabled = true, microZoom = 1.
       const fit = fitOf(r);
       return { x: (e.clientX - r.left - r.width / 2) / fit, y: (e.clientY - r.top - r.height / 2) / fit };
     };
-    // the scene can never leave the screen entirely: panning/zooming keeps
-    // at least ~30% of the viewBox overlapping the viewport
+    // the scene can never leave the screen entirely — panning/zooming keeps
+    // at least ~30% of the viewBox overlapping the viewport (2026-08-24)
     const clampPan = () => {
       const vb = svg.viewBox.baseVal;
       const w = vb && vb.width > 0 ? vb.width : viewBoxSpan;

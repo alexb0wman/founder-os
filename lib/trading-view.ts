@@ -1,78 +1,46 @@
+/**
+ * Pure maths behind /trading (pages/trading.md §2 `view`), ported from the
+ * 2026-10-06 parts bin (lib/trading-view.ts, lib/trading-chart.ts,
+ * lib/trading-guardrails.ts), which ported FounderOS `view.go`. No sqlite, no
+ * DOM, no CSS: every tree (GladOS, Classic, Legacy) imports this file, and the
+ * page lane picks colours.
+ */
 import type { ConnectorStatus } from '@/lib/connectors/types';
-import type { TradeActivity, TradeAnalysis, TradingAccountSnapshot, TradingOrder, TradingPosition } from '@/lib/schemas';
+import type {
+  TradeActivity,
+  TradeAnalysis,
+  TradingAccountSnapshot,
+  TradingLimits,
+  TradingLimitsRow,
+  TradingOrder,
+  TradingPosition,
+} from '@/lib/schemas';
 
-/** The sleeve the agent is allowed to trade; everything else is read-only to it. */
+/** The account id the agent may trade; every other account is read-only to it. */
 export const AGENTIC_ID = 'agentic';
 
 /** The wallet as the board sees it: a public address read from a public RPC. */
-export type PhantomView = {
-  address: string;
-  sol: number;
-  usdPerSol: number | null;
-  usdValue: number | null;
-  fetchedAt: string;
-};
-
-/** "68SH…BST2"  -  the first and last four of a base58 address. */
-export function shortAddress(address: string): string {
-  return address.length <= 10 ? address : `${address.slice(0, 4)}…${address.slice(-4)}`;
-}
-
-/**
- * Everything the /trading slab draws. Built once by lib/trading-payload.ts and
- * served two ways: the server page hands it to the board as `initial`, and
- * GET /api/trading returns the identical shape for the board's 60s refresh.
- */
-export type TradingPayload = {
-  accounts: TradingAccountSnapshot[];
-  history: Record<string, TradingAccountSnapshot[]>;
-  /** The largest account, kept so single-account readers still work. */
-  snapshot: TradingAccountSnapshot | null;
-  positions: TradingPosition[];
-  activity: TradeActivity[];
-  /** The agent's reasoning: the only thing on screen on a no-trade day. */
-  analysis: TradeAnalysis | null;
-  /** Live at the broker right now  -  state, not history. */
-  openOrders: TradingOrder[];
-  status: ConnectorStatus;
-  source: string | null;
-  /** null when the wallet is unreachable; the connector already fails soft. */
-  phantom: PhantomView | null;
-  /** When this payload was built, so the board can age it honestly. */
-  at: string;
-};
-
-/**
- * Pure helpers behind the /trading slab. No DOM, no React: the board draws
- * what these return, so freshness, attribution and the size buckets are
- * pinned by tests/trading-view.test.ts rather than read off the JSX.
- */
+export type PhantomView = { address: string; sol: number; usdPerSol: number | null; usdValue: number | null; fetchedAt: string };
 
 const MIN = 60_000;
+const round = (n: number) => Math.round(n * 100) / 100;
 
-/** "synced Nm ago" in the Brand Deals voice. */
-export function syncAge(iso: string, now: number = Date.now()): string {
-  const m = Math.max(0, Math.floor((now - Date.parse(iso)) / MIN));
-  if (m < 1) return 'synced just now';
-  if (m < 60) return `synced ${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `synced ${h}h ago`;
-  return `synced ${Math.floor(h / 24)}d ago`;
-}
+/** A feed older than this is stale (connector state error, warn pill). */
+export const TRADING_STALE_MS = 24 * 60 * MIN;
 
-export type Freshness = { state: 'none' | 'seeded' | 'live' | 'stale'; label: string };
+export type Freshness = { state: 'none' | 'live' | 'stale'; label: string; ageMs: number | null };
 
-/** Feed liveness, decided by the freshest real push. Seeded rows are never
- *  live however recent their timestamp; a real push older than 90 minutes is
- *  stale (the feed runs every 30 in market hours, so 90 is three misses). */
+/** "updated just now" / "updated 12 min ago" / "Feed 2 days old". Decided by the freshest push. */
 export function freshness(accounts: TradingAccountSnapshot[], now: number = Date.now()): Freshness {
-  if (accounts.length === 0) return { state: 'none', label: 'no feed yet' };
-  const real = accounts.filter((a) => a.source !== 'seed');
-  if (real.length === 0) return { state: 'seeded', label: 'seeded · example rows' };
-  const freshest = real.reduce((a, b) => (a.capturedAt >= b.capturedAt ? a : b));
-  const label = syncAge(freshest.capturedAt, now);
-  const age = now - Date.parse(freshest.capturedAt);
-  return { state: age <= 90 * MIN ? 'live' : 'stale', label };
+  if (accounts.length === 0) return { state: 'none', label: 'No feed yet', ageMs: null };
+  const freshest = accounts.reduce((a, b) => (a.capturedAt >= b.capturedAt ? a : b));
+  const ageMs = Math.max(0, now - Date.parse(freshest.capturedAt));
+  const m = Math.floor(ageMs / MIN);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (ageMs >= TRADING_STALE_MS) return { state: 'stale', label: d >= 2 ? `Feed ${d} days old` : `Feed ${h} hours old`, ageMs };
+  const label = m < 1 ? 'updated just now' : m < 60 ? `updated ${m} min ago` : `updated ${h} h ago`;
+  return { state: 'live', label, ageMs };
 }
 
 const SIZE_BUCKETS: Array<{ label: string; max: number }> = [
@@ -82,8 +50,7 @@ const SIZE_BUCKETS: Array<{ label: string; max: number }> = [
   { label: '$1k+', max: Infinity },
 ];
 
-/** The book by market value, every bucket present so the dot matrix keeps
- *  its columns when the sleeve holds one thing. */
+/** The book by market value; every bucket present so the chart keeps its columns. */
 export function positionSizes(positions: TradingPosition[]): Array<{ label: string; count: number }> {
   return SIZE_BUCKETS.map((b, i) => {
     const min = i === 0 ? -Infinity : SIZE_BUCKETS[i - 1].max;
@@ -93,17 +60,15 @@ export function positionSizes(positions: TradingPosition[]): Array<{ label: stri
 
 export type ActivityFilter = 'all' | 'agent' | 'you' | 'rejected';
 
-const isAgent = (a: TradeActivity) => /agent/i.test(a.agent) && !/alex/i.test(a.agent);
+/** A row a human placed: the feed tags these manual / override / operator. */
+export const isHumanTrade = (a: Pick<TradeActivity, 'agent'>) => /\b(manual|override|operator|you|human)\b/i.test(a.agent);
 
-/** Who did it and how it ended. "you" is anything a human placed, manual or
- *  override; "agent" is the Markets Agent whatever the outcome; "rejected" is
- *  the orders that never reached a fill. */
 export function filterActivity(rows: TradeActivity[], filter: ActivityFilter): TradeActivity[] {
   switch (filter) {
     case 'agent':
-      return rows.filter(isAgent);
+      return rows.filter((a) => !isHumanTrade(a));
     case 'you':
-      return rows.filter((a) => !isAgent(a));
+      return rows.filter(isHumanTrade);
     case 'rejected':
       return rows.filter((a) => a.status === 'rejected');
     default:
@@ -120,65 +85,170 @@ export function activityCounts(rows: TradeActivity[]): Record<ActivityFilter, nu
   };
 }
 
-// ── The Accounts card in Deal Volume's shape (slab kit, 2026-09-24) ─────────
-
-export type TradingMeter = { label: string; frac: number; display: string; hue: string };
-export type TradingVolume = {
-  /** Brokerage total across every fed account (the wallet rides separately). */
-  headline: number;
-  chips: Array<{ tone: 'ok' | 'err' | 'accent'; text: string }>;
-  caption: string;
-  meters: TradingMeter[];
-  foot: string;
+export type AgentSummary = {
+  hasActed: boolean;
+  tradeCount: number;
+  lastTrade: TradeActivity | null;
+  deployedUsd: number;
+  idleCashUsd: number | null;
+  unrealizedPnlUsd: number;
 };
 
-// One hue per account (anti-drift rule), all on the colorway.
-export const TRADING_HUE = { agentic: 'var(--accent)', individual: 'var(--ramp-1)', phantom: 'var(--ramp-4)' };
+/** What the agent has actually done in its sleeve, from the fed rows only. */
+export function agentSummary(snapshot: TradingAccountSnapshot | null, positions: TradingPosition[], trades: TradeActivity[]): AgentSummary {
+  const filled = trades.filter((t) => t.status === 'filled').sort((a, b) => b.at.localeCompare(a.at));
+  return {
+    hasActed: filled.length > 0,
+    tradeCount: filled.length,
+    lastTrade: filled[0] ?? null,
+    deployedUsd: round(positions.reduce((t, p) => t + p.marketValueUsd, 0)),
+    idleCashUsd: snapshot ? snapshot.cashUsd : null,
+    unrealizedPnlUsd: round(positions.reduce((t, p) => t + p.unrealizedPnlUsd, 0)),
+  };
+}
 
-const money = (n: number, cents = true) =>
-  n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: cents ? 2 : 0 });
+export type TradingVolume = {
+  /** Brokerage total across every fed account (the wallet rides separately). */
+  headlineUsd: number;
+  dayPnlUsd: number;
+  investedUsd: number;
+  positionCount: number;
+  /** headline plus the wallet, null when the wallet has no price */
+  totalWithWalletUsd: number | null;
+  meters: Array<{ key: string; label: string; frac: number; valueUsd: number | null; agentMayTrade: boolean }>;
+};
 
-/**
- * The /trading Accounts card as Brand Deals' Deal Volume: the brokerage total
- * as the count-up headline, the day's P&L and the book as dot chips, and one
- * meter per account plus the Phantom wallet, each its honest share of
- * everything held. A wallet with no price, or no wallet, is an empty meter
- * that says why, never a $0 fill.
- */
+/** The Accounts card: one meter per account plus the wallet, each its honest share. */
 export function tradingVolume(x: { accounts: TradingAccountSnapshot[]; positions: TradingPosition[]; phantom: PhantomView | null }): TradingVolume {
   const brokerage = x.accounts.reduce((s, a) => s + a.accountValueUsd, 0);
   const walletUsd = x.phantom?.usdValue ?? 0;
   const total = brokerage + walletUsd;
-  const day = x.accounts.reduce((s, a) => s + a.dayPnlUsd, 0);
-  const invested = x.positions.reduce((s, p) => s + p.marketValueUsd, 0);
   const share = (n: number) => (total > 0 ? Math.max(0, Math.min(1, n / total)) : 0);
-  const n = x.accounts.length;
-
-  const meters: TradingMeter[] = x.accounts.map((a) => ({
-    label: `${a.accountLabel} · ${a.accountId === AGENTIC_ID ? 'agent may trade' : 'read-only to agents'}`,
+  const meters: TradingVolume['meters'] = x.accounts.map((a) => ({
+    key: a.accountId,
+    label: a.accountLabel,
     frac: share(a.accountValueUsd),
-    display: money(a.accountValueUsd),
-    hue: a.accountId === AGENTIC_ID ? TRADING_HUE.agentic : TRADING_HUE.individual,
+    valueUsd: a.accountValueUsd,
+    agentMayTrade: a.accountId === AGENTIC_ID,
   }));
-  const p = x.phantom;
-  meters.push({
-    label: p ? `Phantom · ${p.sol} SOL · ${shortAddress(p.address)}` : 'Phantom · wallet not reachable',
-    frac: p && p.usdValue !== null ? share(p.usdValue) : 0,
-    display: p ? (p.usdValue === null ? 'price unavailable' : money(p.usdValue)) : '--',
-    hue: TRADING_HUE.phantom,
-  });
-
+  if (x.phantom) {
+    meters.push({
+      key: 'phantom',
+      label: `Phantom · ${x.phantom.sol} SOL`,
+      frac: x.phantom.usdValue === null ? 0 : share(x.phantom.usdValue),
+      valueUsd: x.phantom.usdValue,
+      agentMayTrade: false,
+    });
+  }
   return {
-    headline: brokerage,
-    chips: [
-      { tone: day > 0 ? 'ok' : day < 0 ? 'err' : 'accent', text: `${day > 0 ? '+' : day < 0 ? '-' : ''}${money(Math.abs(day))} today` },
-      {
-        tone: 'accent',
-        text: x.positions.length === 0 ? 'all cash' : `${money(invested, false)} in ${x.positions.length} position${x.positions.length === 1 ? '' : 's'}`,
-      },
-    ],
-    caption: `brokerage, ${n} account${n === 1 ? '' : 's'}${p ? ` · ${money(total)} with the wallet` : ''}`,
+    headlineUsd: round(brokerage),
+    dayPnlUsd: round(x.accounts.reduce((s, a) => s + a.dayPnlUsd, 0)),
+    investedUsd: round(x.positions.reduce((s, p) => s + p.marketValueUsd, 0)),
+    positionCount: x.positions.length,
+    totalWithWalletUsd: x.phantom && x.phantom.usdValue === null ? null : round(total),
     meters,
-    foot: `only the agentic sleeve can be traded by an agent · ${p?.usdPerSol ? `${money(p.usdPerSol)} / SOL` : 'wallet read from a public RPC'}`,
+  };
+}
+
+// ── limits: the clamp (pages/trading.md T-5) ───────────────────────────────
+
+/** The 7 numeric fields an operator may set, in display order. */
+export const LIMIT_FIELDS = [
+  'maxDeployedCapitalUsd',
+  'maxNotionalPerTradeUsd',
+  'maxPositionPctOfSleeve',
+  'maxRiskPctPerTrade',
+  'maxConcurrentPositions',
+  'maxTradesPerDay',
+  'minSleeveValueUsd',
+] as const satisfies ReadonlyArray<Exclude<keyof TradingLimits, 'autopilot'>>;
+
+/** Labels and hints from FounderOS TradingLimits.svelte. */
+export const LIMIT_LABELS: Record<(typeof LIMIT_FIELDS)[number], { label: string; hint: string }> = {
+  maxDeployedCapitalUsd: { label: 'Autonomy budget', hint: 'Most capital deployed at once without a human' },
+  maxNotionalPerTradeUsd: { label: 'Max per trade', hint: 'Largest single order' },
+  maxPositionPctOfSleeve: { label: 'Max position', hint: '% of the sleeve in one name' },
+  maxRiskPctPerTrade: { label: 'Risk per trade', hint: '% of the sleeve at risk on one trade' },
+  maxConcurrentPositions: { label: 'Max positions', hint: 'Names held at once' },
+  maxTradesPerDay: { label: 'Trades per day', hint: 'Orders per day' },
+  minSleeveValueUsd: { label: 'Kill-switch floor', hint: 'Buys stop if the sleeve falls through this' },
+};
+
+/**
+ * The schema ranges a stored value is clamped into. These are input RANGES,
+ * not defaults: nothing here is ever shown as if it were saved (SPEC O4). The
+ * 2026-10-06 build's $5,000 / $25,000 ceilings are deliberately not ported.
+ */
+export const LIMIT_RANGES: Record<(typeof LIMIT_FIELDS)[number], { min: number; max: number; integer?: true }> = {
+  maxDeployedCapitalUsd: { min: 1, max: 10_000_000 },
+  maxNotionalPerTradeUsd: { min: 1, max: 10_000_000 },
+  maxPositionPctOfSleeve: { min: 0.1, max: 100 },
+  maxRiskPctPerTrade: { min: 0.1, max: 100 },
+  maxConcurrentPositions: { min: 1, max: 500, integer: true },
+  maxTradesPerDay: { min: 1, max: 500, integer: true },
+  minSleeveValueUsd: { min: 0, max: 10_000_000 },
+};
+
+/** Hold each value inside its range, reporting which fields moved so the UI
+ *  can say a value did not take rather than lying about it. */
+export function clampLimits(input: Record<string, unknown>): { limits: Omit<TradingLimits, 'autopilot'>; clamped: string[]; invalid: string[] } {
+  const limits = {} as Record<string, number>;
+  const clamped: string[] = [];
+  const invalid: string[] = [];
+  for (const field of LIMIT_FIELDS) {
+    const raw = input[field];
+    const r = LIMIT_RANGES[field];
+    if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+      invalid.push(field);
+      continue;
+    }
+    let v = r.integer ? Math.round(raw) : raw;
+    if (v < r.min) v = r.min;
+    if (v > r.max) v = r.max;
+    if (v !== raw) clamped.push(field);
+    limits[field] = v;
+  }
+  return { limits: limits as Omit<TradingLimits, 'autopilot'>, clamped, invalid };
+}
+
+/** Everything /trading draws. One builder (lib/trading-payload.ts) for page and API. */
+export type TradingPayload = {
+  accounts: TradingAccountSnapshot[];
+  history: Record<string, TradingAccountSnapshot[]>;
+  positions: TradingPosition[];
+  activity: TradeActivity[];
+  analysis: TradeAnalysis | null;
+  openOrders: TradingOrder[];
+  limits: TradingLimitsRow | null;
+  status: ConnectorStatus;
+  phantomStatus: ConnectorStatus;
+  phantom: PhantomView | null;
+  view: {
+    freshness: Freshness;
+    volume: TradingVolume;
+    sizes: Array<{ label: string; count: number }>;
+    agent: AgentSummary;
+    activityCounts: Record<ActivityFilter, number>;
+  };
+  /** 'sample' (?sample=1 on a blank install) and 'filming' carry the Sample badge. */
+  mode: 'live' | 'sample' | 'filming';
+  sample: boolean;
+  at: string;
+};
+
+export function buildView(x: {
+  accounts: TradingAccountSnapshot[];
+  positions: TradingPosition[];
+  activity: TradeActivity[];
+  phantom: PhantomView | null;
+  now: number;
+}): TradingPayload['view'] {
+  const sleeve = x.accounts.find((a) => a.accountId === AGENTIC_ID) ?? null;
+  return {
+    freshness: freshness(x.accounts, x.now),
+    volume: tradingVolume(x),
+    sizes: positionSizes(x.positions),
+    agent: agentSummary(sleeve, x.positions.filter((p) => p.accountId === AGENTIC_ID), x.activity.filter((a) => a.accountId === AGENTIC_ID)),
+    activityCounts: activityCounts(x.activity),
   };
 }

@@ -1,17 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { Agent, Department, Person, SopTask, Tool } from '@/lib/schemas';
+import { OPERATOR_NAME } from '@/lib/operator';
 
 /**
  * Generates the brain-store markdown for everything the org consists of:
  * one doc per agent (charter + instructions + harness), per SOP (built out
  * with purpose/trigger/steps/done/escalation), per tool (what it is, who
- * uses it), per human, and per pillar. Wikilinked throughout, so the G-Brain
+ * uses it), per human, and per pillar. Wikilinked throughout, so the Optimal Engine
  * constellation gains real structure from them. Deterministic; safe to
  * regenerate (hand-edited files without the marker are never touched).
  */
 
-export const GENERATED_MARKER = 'generated: founder-os';
+export const GENERATED_MARKER = 'generated: glados';
 
 export type BrainDoc = { path: string; content: string };
 
@@ -104,7 +105,7 @@ export function buildBrainDocs(input: DocsInput): BrainDoc[] {
         ? `${(owner as Agent | undefined)?.instance ?? 'builtin'} · ${(owner as Agent | undefined)?.model ?? 'unknown'}`
         : 'human · judgment call';
     const lead = humanLeadByDept.get(t.departmentId);
-    const escalateTo = t.assigneeKind === 'person' ? 'the operator' : lead ? `${lead.name} (${link(lead.id)})` : 'the operator';
+    const escalateTo = t.assigneeKind === 'person' ? OPERATOR_NAME : lead ? `${lead.name} (${link(lead.id)})` : OPERATOR_NAME;
     const firstStep = t.steps[0] ?? '';
     const lastStep = t.steps[t.steps.length - 1] ?? '';
     docs.push({

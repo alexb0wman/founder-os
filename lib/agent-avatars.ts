@@ -1,8 +1,8 @@
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 
-/** Which agents have a profile photo in public/agents/. Read per render -
- *  the dir is tiny: so a dropped-in photo shows on the next request. */
+/** Which agents have a profile photo in public/agents/. Read per render —
+ *  the dir is tiny — so a dropped-in photo shows on the next request. */
 export function agentAvatars(): Map<string, string> {
   const map = new Map<string, string>();
   try {
@@ -11,7 +11,7 @@ export function agentAvatars(): Map<string, string> {
       if (m && !map.has(m[1])) map.set(m[1], `/agents/${f}`);
     }
   } catch {
-    /* no photos dir: everyone gets the generic icon */
+    /* no photos dir — everyone gets the generic icon */
   }
   return map;
 }

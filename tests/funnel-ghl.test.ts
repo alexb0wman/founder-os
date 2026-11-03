@@ -43,10 +43,10 @@ describe('mapGhlOpportunities', () => {
     expect(byId['ghl-o4']).toBe('opted_in');
   });
 
-  test('produces valid journeys: LC venture, ghl source, stall-ready last-touch date', () => {
+  test('produces valid journeys: venture-b venture, ghl source, stall-ready last-touch date', () => {
     const { journeys } = mapGhlOpportunities([PIPELINE], [opp({ id: 'o1', pipelineStageId: 's-dm' })], NOW);
     const j = FunnelJourneySchema.parse(journeys[0]);
-    expect(j.venture).toBe('launchpad-cohort');
+    expect(j.venture).toBe('default');
     expect(j.touches.every((t) => t.source === 'ghl')).toBe(true);
     expect(j.touches[0].at).toBe('2026-06-01'); // created
     expect(j.touches.at(-1)?.at).toBe('2026-06-28'); // last stage change → decay clock
@@ -57,12 +57,12 @@ describe('mapGhlOpportunities', () => {
       opp({
         id: 'o1',
         contactId: 'CUeK123',
-        contact: { name: 'Casey Jordan', email: 'casey.jordan@example.com', phone: '+15550100412' },
+        contact: { name: 'Jordan Blake', email: 'jordan.blake@example.com', phone: '+15550100199' },
       }),
     ], NOW, 'loc_abc');
     const j = journeys[0];
-    expect(j.email).toBe('casey.jordan@example.com');
-    expect(j.phone).toBe('+15550100412');
+    expect(j.email).toBe('jordan.blake@example.com');
+    expect(j.phone).toBe('+15550100199');
     expect(j.url).toBe('https://app.gohighlevel.com/v2/location/loc_abc/contacts/detail/CUeK123');
   });
 

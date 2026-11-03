@@ -35,12 +35,15 @@ function niceStep(range: number, ticks: number): number {
   return 10 * mag;
 }
 
-export type PieItem = { key: string; label: string; value: number | null };
+/** `color` pins a slice to a token (audience channels use lib/series.ts);
+ * without it the donut cycles its own ramp. */
+export type PieItem = { key: string; label: string; value: number | null; color?: string };
 
 export type PieSlice = {
   key: string;
   label: string;
   value: number;
+  color?: string;
   /** Fraction of the whole (0–1]. */
   share: number;
   /** Degrees, 12 o'clock start (−90), clockwise. */
@@ -59,7 +62,7 @@ export function pieSlices(items: PieItem[]): PieSlice[] {
     const share = i.value / total;
     const startAngle = angle;
     angle += share * 360;
-    return { key: i.key, label: i.label, value: i.value, share, startAngle, endAngle: angle };
+    return { key: i.key, label: i.label, value: i.value, ...(i.color ? { color: i.color } : {}), share, startAngle, endAngle: angle };
   });
 }
 

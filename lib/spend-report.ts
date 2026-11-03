@@ -1,207 +1,156 @@
 /**
- * Month-to-month expenditure report (pure). Takes the ledger's out-rows and
- * answers the questions the operator asks of a statement: what did each month cost,
- * per card; which merchants are recurring subscriptions; and which of those
- * stopped charging (i.e. got cancelled). No DB, no network, no LLM — the
- * grouping is deterministic so the same statements always read the same.
- */
-
-import { CARD_LANES, type CardId } from '@/lib/cards';
-
-export type SpendRow = {
-  date: string; // YYYY-MM-DD
-  description: string;
-  amountCents: number;
-  direction: 'in' | 'out';
-  category: string;
-  card: CardId;
-};
-
-export type MonthTotal = { month: string; totalCents: number; byCard: Record<CardId, number> };
-
-export type Subscription = {
-  merchant: string;
-  card: CardId;
-  /** the typical (median) charge — what it costs him a month */
-  monthlyCents: number;
-  /** the most recent charge, which may differ after a price change */
-  latestCents: number;
-  months: string[]; // ascending, deduped
-  firstMonth: string;
-  lastMonth: string;
-  charges: number;
-  status: 'active' | 'cancelled';
-  category: string;
-};
-
-const monthOf = (date: string): string => date.slice(0, 7);
-
-/** The calendar month before `month` ('2026-01' → '2025-12'). */
-export function prevMonth(month: string): string {
-  const [y, m] = month.split('-').map(Number);
-  return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
-}
-
-/**
- * A stable merchant key. Statement descriptors carry per-charge noise — Amex
- * `*` reference codes, order/store numbers, terminal ids — that would split one
- * subscription into a dozen one-offs. Strip that, keep the leading words.
- */
-export function normalizeMerchant(description: string): string {
-  const raw = description.toUpperCase().trim();
-  let s = raw.split('*')[0]; // ORBIT.COM*RT4G2 → ORBIT.COM
-  s = s.replace(/[^A-Z0-9.& ]+/g, ' ');
-  s = s.replace(/\b\d[\d.]*\b/g, ' '); // order / store / terminal numbers
-  s = s.replace(/\s{2,}/g, ' ').trim();
-  const tokens = s.split(' ').filter(Boolean).slice(0, 3);
-  return tokens.length > 0 ? tokens.join(' ') : raw.replace(/\s+/g, ' ').trim() || description;
-}
-
-const zeroByCard = (): Record<CardId, number> =>
-  Object.fromEntries(CARD_LANES.map((c) => [c.id, 0])) as Record<CardId, number>;
-
-/** Spend per month (ascending), split across the card lanes. Income ignored. */
-export function monthlyTotals(rows: SpendRow[]): MonthTotal[] {
-  const byMonth = new Map<string, MonthTotal>();
-  for (const r of rows) {
-    if (r.direction !== 'out') continue;
-    const month = monthOf(r.date);
-    const entry = byMonth.get(month) ?? { month, totalCents: 0, byCard: zeroByCard() };
-    entry.totalCents += r.amountCents;
-    entry.byCard[r.card] = (entry.byCard[r.card] ?? 0) + r.amountCents;
-    byMonth.set(month, entry);
-  }
-  return [...byMonth.values()].sort((a, b) => a.month.localeCompare(b.month));
-}
-
-const median = (ns: number[]): number => {
-  const s = [...ns].sort((a, b) => a - b);
-  return s.length % 2 ? s[(s.length - 1) / 2] : Math.round((s[s.length / 2 - 1] + s[s.length / 2]) / 2);
-};
-
-/**
- * Recurring merchants: charged in two or more distinct months on the same card,
- * at a steady amount (every charge within 25% of the median — enough slack for
- * a price rise or a usage-based plan, tight enough to reject a coffee shop).
+ * Spend report for /finances (FounderOS merge F8, FO `ExpenditureReport` +
+ * `MonthlyExpenses` + `spend-report.ts`). Expenses by category per month, top
+ * merchants and month over month, from the uploaded card statement ledger
+ * (lib/ledger.ts, rows already categorised by lib/statements.ts). Pure.
  *
- * `latestMonth` is the newest month in the ledger. A subscription whose last
- * charge is older than the month before that has stopped billing — cancelled.
- * Active first, then most expensive; the cancelled ones list underneath.
+ * Honest or absent: no declared or seeded expense fallback (FO's
+ * DECLARED_EXPENSES is not ported). Bank statement PDFs are parsed to monthly
+ * totals only (lib/bank-statements.ts) with no line items or categories, and
+ * their debits include the card payments already in the ledger, so they are
+ * left out rather than double counted. The window ends at the latest uploaded
+ * month, not today, so a gap in uploads never reads as zero spend.
  */
-export function detectSubscriptions(rows: SpendRow[], latestMonth: string): Subscription[] {
-  const groups = new Map<string, SpendRow[]>();
-  for (const r of rows) {
-    if (r.direction !== 'out') continue;
-    const key = `${r.card}|${normalizeMerchant(r.description)}`;
-    groups.set(key, [...(groups.get(key) ?? []), r]);
-  }
+import type { LedgerRow } from '@/lib/statements';
 
-  const grace = prevMonth(latestMonth);
-  const subs: Subscription[] = [];
-  for (const [key, group] of groups) {
-    const months = [...new Set(group.map((r) => monthOf(r.date)))].sort();
-    if (months.length < 2) continue;
-    const amounts = group.map((r) => r.amountCents);
-    const typical = median(amounts);
-    if (typical <= 0) continue;
-    if (amounts.some((a) => Math.abs(a - typical) > typical * 0.25)) continue;
-    const sorted = [...group].sort((a, b) => a.date.localeCompare(b.date));
-    const lastMonth = months[months.length - 1];
-    subs.push({
-      merchant: key.slice(key.indexOf('|') + 1),
-      card: group[0].card,
-      monthlyCents: typical,
-      latestCents: sorted[sorted.length - 1].amountCents,
-      months,
-      firstMonth: months[0],
-      lastMonth,
-      charges: group.length,
-      status: lastMonth >= grace ? 'active' : 'cancelled',
-      category: sorted[sorted.length - 1].category,
-    });
-  }
+export const SPEND_MONTHS = 6;
+/** Categories drawn as their own stack part; the rest roll into Other. */
+export const SPEND_TOP_CATEGORIES = 5;
+export const OTHER_CATEGORY = 'Other';
 
-  return subs.sort((a, b) => {
-    if (a.status !== b.status) return a.status === 'active' ? -1 : 1;
-    return b.monthlyCents - a.monthlyCents || a.merchant.localeCompare(b.merchant);
+export type SpendTxn = { date: string; description: string; usd: number; category: string; merchant: string };
+export type SpendMonth = { month: string; label: string; total: number; byCategory: Record<string, number> };
+export type SpendCategory = { category: string; total: number; share: number; count: number };
+export type SpendMerchant = { merchant: string; total: number; count: number };
+export type SpendReport = {
+  months: SpendMonth[];
+  /** every category in the window, largest first */
+  categories: SpendCategory[];
+  /** the stacked bar's keys: the top categories plus Other when anything rolls up */
+  keys: string[];
+  merchants: SpendMerchant[];
+  total: number;
+  /** latest month against the one before; null when there is no earlier month with spend */
+  mom: { month: string; total: number; prevMonth: string; prevTotal: number; deltaPct: number | null } | null;
+  /** the window's transactions, newest first, for the per-category sheet */
+  txns: SpendTxn[];
+};
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+export function monthLabel(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return `${MONTHS[(m - 1) % 12]} ${String(y).slice(2)}`;
+}
+
+/** The `count` calendar months ending at `last` (YYYY-MM), oldest first. */
+export function monthWindow(last: string, count = SPEND_MONTHS): string[] {
+  const [y, m] = last.split('-').map(Number);
+  return Array.from({ length: count }, (_, i) => {
+    const d = new Date(Date.UTC(y, m - 1 - (count - 1 - i), 1));
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
   });
 }
 
-/** What a single month went on, merchant by merchant, biggest first. */
-export function topMerchants(
-  rows: SpendRow[],
-  month: string | null,
-  limit = 25,
-): { merchant: string; amountCents: number; count: number; card: CardId; category: string }[] {
-  const totals = new Map<string, { merchant: string; amountCents: number; count: number; card: CardId; category: string }>();
-  for (const r of rows) {
-    if (r.direction !== 'out') continue;
-    if (month && monthOf(r.date) !== month) continue;
-    const merchant = normalizeMerchant(r.description);
-    const entry = totals.get(merchant) ?? { merchant, amountCents: 0, count: 0, card: r.card, category: r.category };
-    entry.amountCents += r.amountCents;
-    entry.count += 1;
-    totals.set(merchant, entry);
-  }
-  return [...totals.values()].sort((a, b) => b.amountCents - a.amountCents).slice(0, limit);
+/** A card descriptor reduced to a merchant name: no reference numbers, processor prefixes or store ids. */
+export function merchantOf(description: string): string {
+  const cleaned = description
+    .replace(/^(sq|tst|pp|paypal|sp|py)\s*\*\s*/i, '')
+    .replace(/[*#]/g, ' ')
+    .replace(/\b[\w.-]*\d[\w.-]*\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = cleaned.split(' ').filter(Boolean).slice(0, 3);
+  if (words.length === 0) return description.trim() || 'Unknown';
+  return words.map((w) => w[0].toUpperCase() + w.slice(1).toLowerCase()).join(' ');
 }
 
-/** Total spend for a month (or all of it when `month` is null). */
-export function spendTotalCents(rows: SpendRow[], month: string | null): number {
-  return rows.reduce(
-    (sum, r) => (r.direction === 'out' && (!month || monthOf(r.date) === month) ? sum + r.amountCents : sum),
-    0,
-  );
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Null when there is no outbound row: the card shows its empty state. */
+export function spendReport(rows: readonly LedgerRow[], months = SPEND_MONTHS): SpendReport | null {
+  const out = rows.filter((r) => r.direction === 'out' && /^\d{4}-\d{2}/.test(r.date) && r.amountCents > 0);
+  if (out.length === 0) return null;
+  const last = out.reduce((m, r) => (r.date.slice(0, 7) > m ? r.date.slice(0, 7) : m), '0000-00');
+  const window = monthWindow(last, months);
+  const inWindow = out.filter((r) => r.date.slice(0, 7) >= window[0]);
+
+  const txns: SpendTxn[] = inWindow
+    .map((r) => ({ date: r.date, description: r.description, usd: r.amountCents / 100, category: r.category, merchant: merchantOf(r.description) }))
+    .sort((a, b) => b.date.localeCompare(a.date) || b.usd - a.usd);
+  const total = round2(txns.reduce((n, t) => n + t.usd, 0));
+
+  const catTotals = new Map<string, { total: number; count: number }>();
+  const merchTotals = new Map<string, { total: number; count: number }>();
+  for (const t of txns) {
+    const c = catTotals.get(t.category) ?? { total: 0, count: 0 };
+    c.total += t.usd;
+    c.count++;
+    catTotals.set(t.category, c);
+    const m = merchTotals.get(t.merchant) ?? { total: 0, count: 0 };
+    m.total += t.usd;
+    m.count++;
+    merchTotals.set(t.merchant, m);
+  }
+  const categories: SpendCategory[] = [...catTotals.entries()]
+    .map(([category, c]) => ({ category, total: round2(c.total), count: c.count, share: total > 0 ? c.total / total : 0 }))
+    .sort((a, b) => b.total - a.total || a.category.localeCompare(b.category));
+  const top = categories.slice(0, SPEND_TOP_CATEGORIES).map((c) => c.category);
+  const keys = categories.length > SPEND_TOP_CATEGORIES ? [...top, OTHER_CATEGORY] : top;
+
+  const monthsOut: SpendMonth[] = window.map((month) => {
+    const byCategory: Record<string, number> = Object.fromEntries(keys.map((k) => [k, 0]));
+    let sum = 0;
+    for (const t of txns) {
+      if (t.date.slice(0, 7) !== month) continue;
+      const k = top.includes(t.category) ? t.category : OTHER_CATEGORY;
+      byCategory[k] = round2((byCategory[k] ?? 0) + t.usd);
+      sum += t.usd;
+    }
+    return { month, label: monthLabel(month), total: round2(sum), byCategory };
+  });
+
+  const merchants: SpendMerchant[] = [...merchTotals.entries()]
+    .map(([merchant, m]) => ({ merchant, total: round2(m.total), count: m.count }))
+    .sort((a, b) => b.total - a.total || a.merchant.localeCompare(b.merchant))
+    .slice(0, 5);
+
+  const cur = monthsOut[monthsOut.length - 1];
+  const prev = [...monthsOut].reverse().slice(1).find((m) => m.total > 0);
+  const mom = prev
+    ? { month: cur.month, total: cur.total, prevMonth: prev.month, prevTotal: prev.total, deltaPct: prev.total > 0 ? Math.round(((cur.total - prev.total) / prev.total) * 1000) / 10 : null }
+    : null;
+
+  return { months: monthsOut, categories, keys, merchants, total, mom, txns };
 }
 
-/** Per-category spend for a month (or all of it when `month` is null), biggest
-    first. This is what redraws the pie when the operator steps through months. */
-export function categoryTotals(
-  rows: SpendRow[],
-  month: string | null,
-): { category: string; totalCents: number }[] {
-  const totals = new Map<string, number>();
-  for (const r of rows) {
-    if (r.direction !== 'out') continue;
-    if (month && monthOf(r.date) !== month) continue;
-    totals.set(r.category, (totals.get(r.category) ?? 0) + r.amountCents);
-  }
-  return [...totals.entries()]
-    .map(([category, totalCents]) => ({ category, totalCents }))
-    .sort((a, b) => b.totalCents - a.totalCents || a.category.localeCompare(b.category));
-}
-
-/** Spend split across the three card lanes. Every lane is reported even when it
-    was silent that month, so a missing statement reads as $0 rather than as an
-    absent lane. */
-export function cardTotals(rows: SpendRow[], month: string | null): { card: CardId; totalCents: number }[] {
-  const totals = new Map<CardId, number>(CARD_LANES.map((c) => [c.id, 0]));
-  for (const r of rows) {
-    if (r.direction !== 'out') continue;
-    if (month && monthOf(r.date) !== month) continue;
-    totals.set(r.card, (totals.get(r.card) ?? 0) + r.amountCents);
-  }
-  return CARD_LANES.map((c) => ({ card: c.id, totalCents: totals.get(c.id) ?? 0 }));
-}
+/** What the page hands both trees. */
+export type SpendCard = { state: 'none' } | { state: 'ready'; sample: boolean; report: SpendReport };
 
 /**
- * Where the expenses view should point after the ledger changes underneath
- * it: an upload has to show the data that was just submitted.
- *
- * A month that was not in the list before is a month that was just uploaded,
- * so that is what belongs on screen: the newest of them when a statement
- * spans several, and a back-dated statement too, not just whatever is newest
- * overall. When the upload only added rows to months already there, the
- * current month stays put: the totals under it redraw on their own.
+ * Filming and `?sample=1` fixture: six months of invented card spend ending
+ * last month. A response, never a ledger row; always shown with the Sample badge.
  */
-export function monthAfterRefresh(
-  current: string | null,
-  previousMonths: string[],
-  months: string[],
-): string | null {
-  const seen = new Set(previousMonths);
-  const arrived = months.filter((m) => !seen.has(m));
-  if (arrived.length > 0) return arrived[arrived.length - 1];
-  if (current && months.includes(current)) return current;
-  return months.length > 0 ? months[months.length - 1] : null;
+export function sampleSpendRows(now: Date = new Date()): LedgerRow[] {
+  const plan: [string, string, number][] = [
+    ['Software', 'NORTHBEAM ANALYTICS', 412],
+    ['Software', 'LINEAR APP', 96],
+    ['Software', 'VERCEL INC', 240],
+    ['Advertising', 'META ADS 4471', 1850],
+    ['Contractors', 'UPWORK *ESCROW 2231', 2200],
+    ['Travel', 'DELTA AIR 0062', 640],
+    ['Meals', 'SQ *CORNER CAFE', 84],
+    ['Office', 'WEWORK 118 MEMBERSHIP', 450],
+  ];
+  const rows: LedgerRow[] = [];
+  for (let back = 6; back >= 1; back--) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1));
+    const ym = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+    plan.forEach(([category, description, base], i) => {
+      if (category === 'Travel' && back % 2 === 0) return;
+      const swing = 1 + (((back * 7 + i * 3) % 9) - 4) / 20;
+      rows.push({ date: `${ym}-${String(3 + i * 3).padStart(2, '0')}`, description, amountCents: Math.round(base * swing * 100), direction: 'out', category });
+    });
+  }
+  return rows;
 }

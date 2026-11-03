@@ -1,21 +1,29 @@
 import { layoutBrainNodes, polar, type BrainCluster } from '@/lib/brain-viz';
 
 /**
- * The G-Brain knowledge core  -  three data rings around a health gauge.
+ * The Optimal Engine knowledge core — three data rings around a health gauge.
  * Pure SVG (animations are CSS in globals.css), so it renders on the server.
  * `compact` hides cluster labels + ring callouts for the Home mini card.
+ *
+ * Version, Supabase page count and Supabase state come from the provider or
+ * are omitted (GladOS UI H33): no remembered numbers.
  */
 export function BrainViz({
   clusters,
   health,
-  supabasePages = 918,
-  version = 'v0.47',
+  supabasePages = null,
+  supabaseState = null,
+  version = null,
   compact = false,
 }: {
   clusters: BrainCluster[];
   health: number | null;
-  supabasePages?: number;
-  version?: string;
+  /** from `gbrain stats`; null when it did not answer */
+  supabasePages?: number | null;
+  /** 'Live' | 'Paused' | 'Unknown', from lib/brain-layers.ts supabaseState */
+  supabaseState?: string | null;
+  /** from `engine doctor`; null when it reports none */
+  version?: string | null;
   compact?: boolean;
 }) {
   const { nodes, labels } = layoutBrainNodes(clusters);
@@ -24,7 +32,7 @@ export function BrainViz({
   const C = 2 * Math.PI * arcR;
   const healthArc = ((health ?? 0) / 100) * C;
 
-  // Supabase outer dots  -  a sampled view of the remote page count
+  // Supabase outer dots — a sampled view of the remote page count
   const outer: { x: number; y: number }[] = [];
   for (let i = 0; i < 42; i++) {
     const a = (i / 42) * 360 + (i % 5) * 1.7;
@@ -34,7 +42,7 @@ export function BrainViz({
   }
 
   return (
-    <svg viewBox="0 0 520 520" role="img" aria-label="G-Brain knowledge core">
+    <svg viewBox="0 0 520 520" role="img" aria-label="Optimal Engine knowledge core">
       <defs>
         <radialGradient id="coreGrad">
           <stop offset="0%" stopColor="var(--brain-1)" stopOpacity="0.22" />
@@ -57,7 +65,7 @@ export function BrainViz({
         <path d="M260 260 L260 40 A220 220 0 0 1 369 69 Z" fill="url(#sweepGrad)" />
       </g>
 
-      {/* outer ring  -  supabase (paused) */}
+      {/* outer ring — supabase (paused) */}
       <g className="brain-ring r3">
         <circle cx="260" cy="260" r="210" fill="none" stroke="var(--border-strong)" strokeDasharray="2 7" strokeWidth="1" />
         {outer.map((p, i) => (
@@ -65,7 +73,7 @@ export function BrainViz({
         ))}
       </g>
 
-      {/* middle ring  -  ollama bge-m3 embeddings */}
+      {/* middle ring — zeroentropy embeddings */}
       <g className="brain-ring r2">
         <circle cx="260" cy="260" r="158" fill="none" stroke="var(--border-strong)" strokeWidth="1" opacity="0.8" />
         {Array.from({ length: 8 }, (_, i) => {
@@ -85,7 +93,7 @@ export function BrainViz({
         })}
       </g>
 
-      {/* inner ring  -  brain-store pages */}
+      {/* inner ring — brain-store pages */}
       <g className="brain-ring r1">
         <circle cx="260" cy="260" r="108" fill="none" stroke="var(--brain-1)" strokeOpacity="0.3" strokeWidth="1" />
         {nodes.map((n, i) => (
@@ -110,12 +118,11 @@ export function BrainViz({
               y={y}
               textAnchor={anchor}
               dominantBaseline="middle"
-              fontFamily="var(--font-mono)"
-              fontSize="8.5"
-              letterSpacing="1.5"
+              fontFamily="var(--font-sans)"
+              fontSize="9.5"
               fill="var(--text-3)"
             >
-              {l.label.toUpperCase()} · {l.pages}
+              {l.label} · {l.pages}
             </text>
           );
         })}
@@ -138,28 +145,31 @@ export function BrainViz({
           />
         )}
         <circle cx="260" cy="260" r="58" fill="var(--surface)" stroke="var(--brain-1)" strokeOpacity="0.35" strokeWidth="1" />
-        <text x="260" y="252" textAnchor="middle" fontFamily="var(--font-mono)" fontSize="30" fontWeight="600" fill="var(--text)">
-          {health ?? ' - '}
+        <text x="260" y="252" textAnchor="middle" fontFamily="var(--font-sans)" fontSize="30" fontWeight="400" fill="var(--text)">
+          {health ?? '—'}
         </text>
-        <text x="260" y="272" textAnchor="middle" fontFamily="var(--font-mono)" fontSize="8" letterSpacing="2.5" fill="var(--text-3)">
-          HEALTH / 100
+        <text x="260" y="272" textAnchor="middle" fontFamily="var(--font-sans)" fontSize="9" fill="var(--text-3)">
+          Health / 100
         </text>
-        <text x="260" y="288" textAnchor="middle" fontFamily="var(--font-mono)" fontSize="7.5" letterSpacing="1.5" fill="var(--brain-2)">
-          GBRAIN {version.toUpperCase()}
-        </text>
+        {version && (
+          <text x="260" y="288" textAnchor="middle" fontFamily="var(--font-mono)" fontSize="7.5" letterSpacing="0.5" fill="var(--brain-2)">
+            engine {/^v/i.test(version) ? version : `v${version}`}
+          </text>
+        )}
       </g>
 
       {/* ring callouts */}
       {!compact && (
-        <g fontFamily="var(--font-mono)" fontSize="8.5" letterSpacing="1.2">
+        <g fontFamily="var(--font-sans)" fontSize="9.5">
           <text x="260" y="146" textAnchor="middle" fill="var(--brain-1)">
-            BRAIN-STORE · {totalPages} PAGES
+            Brain-store · {totalPages} pages
           </text>
           <text x="260" y="96" textAnchor="middle" fill="var(--brain-2)">
-            OLLAMA · BGE-M3 · 1024d
+            ZeroEntropy · embeddings
           </text>
           <text x="260" y="44" textAnchor="middle" fill="var(--text-3)">
-            SUPABASE · {supabasePages} PAGES · PAUSED
+            Supabase · {supabasePages != null ? `${supabasePages} pages` : 'counts unavailable'}
+            {supabaseState ? ` · ${supabaseState.toLowerCase()}` : ''}
           </text>
         </g>
       )}

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { seedDatabase } from '@/lib/seed';
 import { dmThreads } from '@/lib/social';
 import type { SocialDmMessage } from '@/lib/schemas';
 
-let db: FounderDb;
+let db: GladosDb;
 afterEach(() => db?.close());
 
 function msg(over: Partial<SocialDmMessage> = {}): SocialDmMessage {
@@ -12,8 +12,8 @@ function msg(over: Partial<SocialDmMessage> = {}): SocialDmMessage {
     id: 'm1',
     platform: 'instagram',
     subscriberId: 's1',
-    name: 'Alex',
-    handle: 'alex',
+    name: 'Marcus Webb',
+    handle: 'marcus.webb',
     text: 'hey',
     direction: 'in',
     tag: null,
@@ -47,16 +47,10 @@ describe('social.dmMessages', () => {
     expect(db.social.dmMessages('instagram').map((m) => m.id)).toEqual(['ig']);
   });
 
-  test('seed ships a realistic multi-conversation Instagram DM inbox', () => {
+  test('seed ships an empty DM inbox: no invented conversations', () => {
     db = openDb(':memory:');
     seedDatabase(db);
-    const msgs = db.social.dmMessages('instagram');
-    expect(msgs.length).toBeGreaterThan(3);
-    expect(msgs.every((m) => m.platform === 'instagram')).toBe(true);
-    // more than one conversation, and both inbound + outbound present
-    expect(new Set(msgs.map((m) => m.subscriberId)).size).toBeGreaterThan(1);
-    expect(msgs.some((m) => m.direction === 'in')).toBe(true);
-    expect(msgs.some((m) => m.direction === 'out')).toBe(true);
+    expect(db.social.dmMessages('instagram')).toEqual([]);
   });
 });
 

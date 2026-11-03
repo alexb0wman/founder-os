@@ -1,120 +1,221 @@
 import { describe, expect, test } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
-  BRAND_DEALS_CACHE_TTL_MS,
-  PIPELINE_ORDER,
-  SEEDED_DEALS,
-  fetchBrandDeals,
-  groupDeals,
-  parseNotionDeal,
-} from '@/lib/connectors/brand-deals';
-import { BrandDealSchema } from '@/lib/schemas';
+  assembleSnapshot,
+  extractQuotedUsd,
+  getBrandDeals,
+  parseChain,
+  parseLog,
+  parsePendingList,
+  parseRecipient,
+} from '@/lib/brand-deals';
+import { openDb } from '@/lib/db';
 
-/**
- * /brand-deals mirrors the Notion "Brand Deals Hub" database. Notion stays the
- * source of truth (the brand-deal agents and any invited collaborators work
- * there); the OS renders it. An iframe was measured dead — Notion sends
- * X-Frame-Options: SAMEORIGIN even on published pages — so this reads the API.
- */
+const FIX = path.join(process.cwd(), 'tests', 'fixtures', 'brand-deals');
+const state = JSON.parse(readFileSync(path.join(FIX, 'state.json'), 'utf8'));
+const logText = readFileSync(path.join(FIX, 'bdpilot.log'), 'utf8');
+const listText = readFileSync(path.join(FIX, 'gsend-list.txt'), 'utf8');
 
-// A trimmed but shape-accurate Notion API page object, as databases.query returns.
-const NOTION_PAGE = {
-  id: 'abc-123',
-  url: 'https://www.notion.so/Acme-abc123',
-  last_edited_time: '2026-08-10T12:00:00.000Z',
-  properties: {
-    'Brand Name': { type: 'title', title: [{ plain_text: 'Acme Tools' }] },
-    Status: { type: 'status', status: { name: 'Negotiating' } },
-    'Brand Tier': { type: 'select', select: { name: 'A' } },
-    'Deal Value': { type: 'number', number: 4500 },
-    Budget: { type: 'number', number: 6000 },
-    'Amount Agreed': { type: 'number', number: null },
-    'Suggested Rate': { type: 'number', number: 5000 },
-    'Paid in Full': { type: 'checkbox', checkbox: false },
-    Deadline: { type: 'date', date: { start: '2026-09-01' } },
-    'Follow-up Date': { type: 'date', date: null },
-    'Contact Name': { type: 'rich_text', rich_text: [{ plain_text: 'Jo Doe' }] },
-    'Contact Email': { type: 'email', email: 'jo@acme.com' },
-    'Main Channel': { type: 'select', select: { name: 'Instagram' } },
-    'Video Type': { type: 'select', select: { name: 'Integration' } },
-    Source: { type: 'select', select: { name: 'Inbound' } },
-    'ICP Fit': { type: 'select', select: { name: 'Strong' } },
-  },
-};
-
-describe('parseNotionDeal', () => {
-  test('maps a Notion page into a validated BrandDeal', () => {
-    const deal = parseNotionDeal(NOTION_PAGE);
-    expect(deal).not.toBeNull();
-    expect(BrandDealSchema.parse(deal)).toEqual(deal);
-    expect(deal!.brand).toBe('Acme Tools');
-    expect(deal!.status).toBe('Negotiating');
-    expect(deal!.dealValueUsd).toBe(4500);
-    expect(deal!.amountAgreedUsd).toBeNull();
-    expect(deal!.deadline).toBe('2026-09-01');
-    expect(deal!.followUpDate).toBeNull();
-    expect(deal!.contactEmail).toBe('jo@acme.com');
-    expect(deal!.notionUrl).toContain('notion.so');
+describe('brand-deals parsers', () => {
+  test('parseRecipient splits Name <email>', () => {
+    expect(parseRecipient('Carter Ricket <carter@example.com>')).toEqual({
+      name: 'Carter Ricket',
+      email: 'carter@example.com',
+    });
+    expect(parseRecipient('bare@example.com').email).toBe('bare@example.com');
   });
 
-  test('tolerates missing properties rather than dropping the row', () => {
-    const bare = {
-      id: 'x',
-      url: 'https://www.notion.so/x',
-      last_edited_time: '2026-08-01T00:00:00.000Z',
-      properties: { 'Brand Name': { type: 'title', title: [{ plain_text: 'Mystery Co' }] } },
+  test('parsePendingList reads gsend list output, skips the trailer', () => {
+    const rows = parsePendingList(listText);
+    expect(rows).toHaveLength(8);
+    expect(rows[0].id).toBe('r1001');
+    expect(rows[0].subject).toContain('Sponsorship');
+  });
+
+  test('parseLog extracts recipients and chronological events', () => {
+    const { recipients, events } = parseLog(logText);
+    expect(recipients.get('r2001')).toContain('contact1@brand1.example');
+    const kinds = new Set(events.map((e) => e.kind));
+    expect(kinds.has('announced')).toBe(true);
+    expect(kinds.has('sent')).toBe(true);
+  });
+
+  test('parseChain recovers messages from cached Telegram HTML', () => {
+    const { chainLen, chain } = parseChain(state.chains['r1001']);
+    expect(chainLen).toBe(42);
+    expect(chain.length).toBeGreaterThan(10);
+    expect(chain[0].who.length).toBeGreaterThan(0);
+    expect(chain[0].body).not.toContain('&lt;');
+    expect(chain[0].body).not.toContain('<blockquote');
+  });
+});
+
+describe('brand-deals snapshot', () => {
+  const snap = assembleSnapshot(state, logText, listText, {
+    state: true,
+    log: true,
+    drafts: true,
+  });
+
+  test('stage derivation is honest to the data', () => {
+    expect(snap.counts.approval).toBe(8);
+    expect(snap.counts.sent).toBeGreaterThanOrEqual(15);
+    expect(snap.counts.closed).toBe(0); // scanner not built — never faked
+    const first = snap.deals.find((d) => d.id === 'r1001');
+    expect(first?.stage).toBe('approval');
+    expect(first?.brand).toBe('Jane Doe');
+    // in done[] without a logged send line still counts as sent
+    const doneOnly = snap.deals.find((d) => d.id === 'r3001');
+    expect(doneOnly?.stage).toBe('sent');
+  });
+
+  test('tags surface UNIQUE deals with reasons', () => {
+    expect(snap.counts.unique).toBeGreaterThanOrEqual(4);
+    const unique = snap.deals.filter((d) => d.tag === 'UNIQUE');
+    expect(unique.some((d) => d.tagReason.length > 0)).toBe(true);
+  });
+
+  test('pending deals carry summary + chain from the daemon caches', () => {
+    const withSummary = snap.deals.filter((d) => d.stage === 'approval' && d.summary);
+    expect(withSummary.length).toBe(8);
+    const withChain = snap.deals.filter((d) => d.stage === 'approval' && d.chain.length > 0);
+    expect(withChain.length).toBe(8);
+  });
+
+  test('recent events are newest-first and carry brand names', () => {
+    expect(snap.events.length).toBeGreaterThan(5);
+    for (let i = 1; i < snap.events.length; i++) {
+      expect(snap.events[i - 1].at >= snap.events[i].at).toBe(true);
+    }
+    expect(snap.events.some((e) => e.brand && !e.brand.startsWith('r'))).toBe(true);
+  });
+});
+
+describe('quote extraction', () => {
+  const ours = (body: string) => ({ who: 'Operator', date: '1 May 2026 12:00', body });
+  const theirs = (body: string) => ({ who: 'Jane <jane@brand.com>', date: '1 May 2026 11:00', body });
+
+  test('reads k-form anchors from our last money message, taking the max', () => {
+    expect(
+      extractQuotedUsd([
+        theirs('what are your rates?'),
+        ours('We are at 6.5k for an organic Reel. A Reel plus Story package is 7.5k.'),
+      ]),
+    ).toBe(7500);
+  });
+
+  test('reads $-form amounts and ignores the brand side', () => {
+    expect(
+      extractQuotedUsd([ours('For that scope we are at $4,500 flat.'), theirs('our budget is $1,500')]),
+    ).toBe(4500);
+  });
+
+  test('later quotes supersede earlier ones', () => {
+    expect(
+      extractQuotedUsd([ours('anchor is 25k'), theirs('too high'), ours('we can do 15k for the package')]),
+    ).toBe(15000);
+  });
+
+  test('no money on our side means no quote — never invented', () => {
+    expect(extractQuotedUsd([theirs('we pay $5,000 usually'), ours('what does the campaign look like?')])).toBeNull();
+    expect(extractQuotedUsd([])).toBeNull();
+  });
+
+  test('rejects absurd figures (30 days, 200k views style noise)', () => {
+    expect(extractQuotedUsd([ours('usage window is 30 days at 300k impressions, rate is 8.5k')])).toBe(8500);
+  });
+});
+
+describe('outcome overrides + volume math', () => {
+  test('won/lost move deals to closed and the dollars reconcile', () => {
+    const snap = assembleSnapshot(
+      state,
+      logText,
+      listText,
+      { state: true, log: true, drafts: true },
+      [
+        { dealId: 'r1001', outcome: 'won', amountUsd: 12500 }, // a pending deal marked won
+        { dealId: 'r2002', outcome: 'lost', amountUsd: 8500 }, // a sent deal marked lost
+      ],
+    );
+    expect(snap.counts.won).toBe(1);
+    expect(snap.counts.lost).toBe(1);
+    expect(snap.counts.closed).toBe(2);
+    expect(snap.counts.approval).toBe(7); // r1001 left the approval column
+    const won = snap.deals.find((d) => d.id === 'r1001');
+    expect(won?.stage).toBe('closed');
+    expect(won?.quotedUsd).toBe(12500);
+    expect(won?.quoteSource).toBe('manual');
+    expect(snap.volume.wonUsd).toBe(12500);
+    expect(snap.volume.lostUsd).toBe(8500);
+    // the invariant the KPI card renders on:
+    expect(snap.volume.openUsd).toBe(snap.volume.approvalUsd + snap.volume.awaitingUsd);
+  });
+
+  test('parsed quotes come from the cached chains and count toward open volume', () => {
+    const snap = assembleSnapshot(state, logText, listText, { state: true, log: true, drafts: true });
+    expect(snap.volume.quotedDeals).toBeGreaterThan(0);
+    const quoted = snap.deals.filter((d) => d.quotedUsd != null && d.quoteSource === 'parsed');
+    expect(quoted.length).toBe(snap.volume.quotedDeals);
+    for (const d of quoted) {
+      expect(d.quotedUsd!).toBeGreaterThanOrEqual(500);
+      expect(d.quotedUsd!).toBeLessThanOrEqual(200_000);
+    }
+  });
+});
+
+describe('counterparty merge', () => {
+  test('multiple announced drafts for one thread collapse to one deal — quotes count once', () => {
+    const miniState = {
+      announced: { r1: 1, r2: 2 },
+      done: ['r1'],
+      tags: { r2: ['UNIQUE', 'event ask'] },
+      summaries: {},
+      chains: {
+        r1: [
+          'Full chain, 2 messages, oldest first:\n\n<b>Jane</b>  <i>1 May 2026 10:00</i>\n<blockquote expandable>hi</blockquote>\n<b>Operator</b>  <i>1 May 2026 11:00</i>\n<blockquote expandable>rate is 8.5k</blockquote>\n',
+        ],
+      },
     };
-    const deal = parseNotionDeal(bare);
-    expect(deal!.brand).toBe('Mystery Co');
-    expect(deal!.status).toBe('New'); // Notion's default status group
-    expect(deal!.dealValueUsd).toBeNull();
-  });
-
-  test('a page with no title becomes null, not an unnamed row', () => {
-    expect(parseNotionDeal({ id: 'y', url: 'u', last_edited_time: 't', properties: {} })).toBeNull();
-  });
-});
-
-describe('groupDeals — the pipeline board', () => {
-  test('groups by status in the Notion pipeline order, not alphabetically', () => {
-    const deals = [
-      { ...SEEDED_DEALS[0], status: 'Paid' },
-      { ...SEEDED_DEALS[0], status: 'New' },
-      { ...SEEDED_DEALS[0], status: 'Negotiating' },
-    ];
-    const lanes = groupDeals(deals);
-    const named = lanes.filter((l) => l.deals.length > 0).map((l) => l.status);
-    expect(named).toEqual(['New', 'Negotiating', 'Paid']);
-    // and the full order matches the Notion board
-    expect(PIPELINE_ORDER.slice(0, 3)).toEqual(['New', 'Negotiating', 'Aligned']);
-    expect(PIPELINE_ORDER).toContain('Invoiced');
-  });
-
-  test('an unknown status still shows up rather than silently vanishing', () => {
-    const lanes = groupDeals([{ ...SEEDED_DEALS[0], status: 'Weird Custom' }]);
-    expect(lanes.some((l) => l.status === 'Weird Custom' && l.deals.length === 1)).toBe(true);
+    const log =
+      '2026-08-18T10:00:00\tannounced r1 -> Jane <jane@brand.com>\n' +
+      '2026-08-18T11:00:00\tsent r1\n' +
+      '2026-08-19T09:00:00\tannounced r2 -> Jane <jane@brand.com>\n';
+    const pendingList = 'r2\tJane <jane@brand.com>\tRe: collab\n\n1 draft(s).\n';
+    const snap = assembleSnapshot(miniState as never, log, pendingList, { state: true, log: true, drafts: true });
+    expect(snap.deals).toHaveLength(1);
+    const d = snap.deals[0];
+    expect(d.id).toBe('r2'); // the pending draft is canonical
+    expect(d.stage).toBe('approval');
+    expect(d.tag).toBe('UNIQUE'); // propagates across the merge
+    expect(d.quotedUsd).toBe(8500); // parsed from the shared thread, once
+    expect(snap.volume.openUsd).toBe(8500);
+    expect(snap.counts.approval).toBe(1);
+    expect(snap.counts.sent).toBe(0);
   });
 });
 
-describe('cache + seed rules', () => {
-  test('the TTL outlives the 15-minute sweep that refills it', () => {
-    // same lesson as comms: the sweep pays the cold cost, never a person
-    expect(BRAND_DEALS_CACHE_TTL_MS).toBeGreaterThan(15 * 60_000);
-  });
-
-  test('seeded rows validate and are unmistakably seeded', () => {
-    expect(SEEDED_DEALS.length).toBeGreaterThanOrEqual(4);
-    for (const d of SEEDED_DEALS) expect(BrandDealSchema.parse(d)).toEqual(d);
-    // every seeded row is marked so the page can badge itself honestly
-    expect(SEEDED_DEALS.every((d) => d.seeded)).toBe(true);
+describe('brand-deal override repo', () => {
+  test('round-trips and upserts by deal id', () => {
+    const db = openDb(':memory:');
+    db.brandDeals.upsert({ dealId: 'r1', outcome: 'won', amountUsd: 9000, updatedAt: '2026-08-19T12:00:00.000Z' });
+    expect(db.brandDeals.get('r1')?.outcome).toBe('won');
+    db.brandDeals.upsert({ dealId: 'r1', outcome: 'open', amountUsd: null, updatedAt: '2026-08-19T13:00:00.000Z' });
+    expect(db.brandDeals.get('r1')?.amountUsd).toBeNull();
+    expect(db.brandDeals.all()).toHaveLength(1);
+    db.close();
   });
 });
 
-// The data-source id names one specific workspace's database, so it is
-// configuration with no sensible default: without it the board must show its
-// examples rather than query a stranger's collection.
-test('stays on the seeded examples when the data-source id is unset', async () => {
-  const res = await fetchBrandDeals({ NOTION_API_KEY: 'secret_x' });
-  expect(res.mode).toBe('seeded');
-  expect(res.deals).toEqual(SEEDED_DEALS);
-  expect(res.detail).toContain('NOTION_BRAND_DEALS_SOURCE');
+describe('getBrandDeals loader', () => {
+  test('uses env paths + injected exec, and never throws on a dead gsend', async () => {
+    process.env.BDPILOT_STATE = path.join(FIX, 'state.json');
+    process.env.BDPILOT_LOG = path.join(FIX, 'bdpilot.log');
+    delete process.env.BDPILOT_LIST_FILE;
+    const snap = await getBrandDeals(async () => ({ stdout: '', code: 1 }));
+    expect(snap.sources.state).toBe(true);
+    expect(snap.sources.drafts).toBe(false);
+    expect(snap.counts.sent).toBeGreaterThan(0);
+  });
 });

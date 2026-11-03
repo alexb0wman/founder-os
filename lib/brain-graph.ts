@@ -1,10 +1,10 @@
 /**
- * Brain knowledge graph: parses brain-store markdown into an Obsidian-style
+ * Brain knowledge graph: parses brain-store markdown into an Notes-style
  * node/edge graph plus a deterministic local embedding projection.
  *
  * The embedding here is a lexical stand-in (hashed bag-of-words → PCA → 2D)
  * so the vector view works while Supabase/pgvector is unreachable. When the
- * real bge-m3 vectors come back online, swap `embedNotes` for a provider
+ * real ZeroEntropy vectors come back online, swap `embedNotes` for a provider
  * that reads them — the graph payload shape stays identical.
  */
 import type { BrainGraph, BrainGraphEdge, BrainGraphNode } from '@/lib/schemas';
@@ -24,7 +24,7 @@ export type ParsedNote = {
 
 /** Which agents are assigned to which brain-store folders ('*' = everything). */
 export const AGENT_BRAIN_SCOPES: Record<string, string[]> = {
-  // Current roster (instance agents + workers)
+  // Current roster (instance agents + workers, 2026-06-12)
   conductor: ['*'],
   'data-agent': ['*'],
   'markdown-auditor': ['*'],
@@ -33,28 +33,19 @@ export const AGENT_BRAIN_SCOPES: Record<string, string[]> = {
   'gmail-worker': ['inbox', 'meetings'],
   'whatsapp-worker': ['inbox', 'people'],
   'slack-worker': ['inbox', 'org'],
-  'social-agent': ['media', 'writing', 'ideas'],
-  'postly-publisher': ['media', 'writing', 'ideas'],
-  'adsmith-creative': ['media', 'ideas'],
-  'reelkit-editor': ['media', 'writing'],
-  'renderly-creative': ['media', 'ideas'],
-  'dmflow-mcp': ['media', 'people'],
-  'sales-agent': ['people', 'companies', 'hiring'],
-  'launchpad-cohort-sales': ['people', 'companies'],
-  'vantage-sales': ['people', 'companies'],
-  'paykit-sales': ['people', 'companies'],
-  'vantage-paykit': ['people', 'companies'],
-  'stripe-sales': ['companies'],
-  'processor-confirmation': ['companies'],
-  'flexpay-financing': ['people', 'companies'],
-  'sales-calls-data': ['meetings', 'people', 'companies'],
-  'client-roster': ['people', 'companies'],
-  'client-onboarding': ['people', 'companies'],
-  'client-success': ['people', 'companies', 'meetings'],
-  'stack-monitor': ['media', 'projects'],
-  'payments-pulse': ['companies'],
+  'sales-agent': ['people', 'companies'],
+  'crm-pulse': ['people', 'companies'],
+  'deal-scanner': ['people', 'companies'],
+  'deal-alerts': ['people', 'companies'],
+  'draft-approval-bot': ['inbox', 'people'],
+  'inbound-watcher': ['inbox'],
+  'brand-deal-drafter': ['inbox', 'people', 'writing'],
+  'gsend-sender': ['inbox'],
+  'daily-briefing': ['inbox', 'ideas'],
+  'automation-jobs': ['projects', 'org'],
+  'team-briefing': ['people', 'writing'],
+  'stack-monitor': ['projects'],
   'notion-sync': ['projects', 'writing'],
-  'crm-pulse': ['people', 'companies', 'hiring'],
   // Pre-roster ids kept for back-compat with in-flight work; remove once
   // nothing references them.
   'brain-librarian': ['*'],
@@ -100,34 +91,6 @@ export function chunkText(text: string): string[] {
 const WIKILINK_RE = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
 const INLINE_TAG_RE = /(?:^|\s)#([a-z0-9][\w/-]*)/gi;
 
-/**
- * Code is not prose, and `[[` inside it is not a link. The imported n8n
- * workflow pages carry JSON like `{"node": "Respond to Webhook", ...}` inside
- * fenced blocks, which the bare regex happily read as eight wikilinks to a
- * page that could never exist. Blank the fences and inline spans first so the
- * link graph only ever counts links a human actually wrote.
- */
-/**
- * Is this `[[target]]` a page name at all?
- *
- * One imported n8n page pastes raw workflow JSON straight into the prose, not
- * inside a fence, so `[[{"node": "Respond to Webhook", ...}]]` reads as a
- * wikilink to the regex. Twenty-five of the store's twenty-eight broken links
- * were that single page. A page name has no braces, no quotes and no line
- * break in it.
- */
-export function isPageName(target: string): boolean {
-  const t = target.trim();
-  if (!t || t.length > 120) return false;
-  return !/[{}"\n\r]/.test(t);
-}
-
-export function stripCode(body: string): string {
-  return body
-    .replace(/^(\s*)(```|~~~)[^\n]*\n[\s\S]*?^\s*\2[^\n]*$/gm, '')
-    .replace(/`[^`\n]*`/g, '');
-}
-
 function splitFrontmatter(content: string): { frontmatter: string; body: string } {
   if (!content.startsWith('---')) return { frontmatter: '', body: content };
   const end = content.indexOf('\n---', 3);
@@ -155,57 +118,6 @@ function frontmatterTags(frontmatter: string): string[] {
   return tags.filter(Boolean);
 }
 
-/** A page as the resolver needs to see it: where it lives and what it calls itself. */
-export type ResolvableNote = { slug: string; title: string };
-
-/** `[[target|alias]]` and `[[target#heading]]` both point at `target`. */
-export function linkTarget(raw: string): string {
-  return raw.split('|')[0].split('#')[0].trim();
-}
-
-/**
- * How a `[[wikilink]]` finds its page. ONE implementation, shared by the graph,
- * the auditor and the wiki panels, because three copies of this rule is three
- * different answers to "is that link broken".
- *
- * Title matching is the half that was missing. 303 of the store's links are
- * `[[Claude Code]]` written inside conversation pages, and the page they mean
- * is `projects/claude-code.md`. Matching only slug and basename left every one
- * of them broken, which is most of the store's link graph.
- */
-export function createWikilinkResolver(pages: ResolvableNote[]) {
-  const norm = (s: string): string => s.trim().toLowerCase().replace(/\.md$/, '');
-  const slugify = (s: string): string => norm(s).replace(/\s+/g, '-');
-
-  const bySlug = new Map<string, string>();
-  const byBasename = new Map<string, string>();
-  const byTitle = new Map<string, string>();
-  for (const p of pages) {
-    const slug = norm(p.slug);
-    bySlug.set(slug, p.slug);
-    // First page wins a contested basename or title, so resolution is stable
-    // whatever order the store is read in.
-    const base = slug.split('/').pop()!;
-    if (!byBasename.has(base)) byBasename.set(base, p.slug);
-    const title = norm(p.title);
-    if (title && !byTitle.has(title)) byTitle.set(title, p.slug);
-  }
-
-  return (target: string): string | null => {
-    const key = norm(target);
-    const base = key.split('/').pop()!;
-    const slugged = slugify(target);
-    return (
-      bySlug.get(key) ??
-      byBasename.get(base) ??
-      bySlug.get(slugged) ??
-      byBasename.get(slugged.split('/').pop()!) ??
-      byTitle.get(key) ??
-      null
-    );
-  };
-}
-
 export function parseNote(relPath: string, content: string): ParsedNote {
   const slug = relPath.replace(/\\/g, '/').replace(/\.md$/, '');
   const folder = slug.includes('/') ? slug.split('/')[0] : '(root)';
@@ -214,9 +126,7 @@ export function parseNote(relPath: string, content: string): ParsedNote {
   const h1 = body.match(/^#\s+(.+)$/m);
   const title = h1 ? h1[1].trim() : slug.split('/').pop()!;
 
-  const wikilinks = [...stripCode(body).matchAll(WIKILINK_RE)]
-    .map((m) => m[1].trim())
-    .filter(isPageName);
+  const wikilinks = [...body.matchAll(WIKILINK_RE)].map((m) => m[1].trim());
   const tags = [
     ...new Set([...frontmatterTags(frontmatter), ...[...body.matchAll(INLINE_TAG_RE)].map((m) => m[1])]),
   ];
@@ -373,7 +283,15 @@ export function buildBrainGraph(
   const { coords, neighbors, vectors, space } = embedNotes(parsed.map((p) => p.body));
   const r4 = (x: number) => Math.round(x * 1e4) / 1e4;
 
-  const resolve = createWikilinkResolver(parsed);
+  const bySlug = new Map(parsed.map((p) => [p.slug.toLowerCase(), p.slug]));
+  const byBasename = new Map<string, string>();
+  for (const p of parsed) {
+    byBasename.set(p.slug.split('/').pop()!.toLowerCase(), p.slug);
+  }
+  const resolve = (target: string): string | null => {
+    const key = target.replace(/\.md$/, '').toLowerCase();
+    return bySlug.get(key) ?? byBasename.get(key.split('/').pop()!) ?? null;
+  };
 
   const agentsFor = (folder: string): string[] =>
     Object.entries(scopes)
@@ -434,7 +352,7 @@ export function buildBrainGraph(
   // wikilink edges (unresolved targets dropped)
   for (const p of parsed) {
     for (const target of p.wikilinks) {
-      const resolved = resolve(linkTarget(target));
+      const resolved = resolve(target);
       if (resolved && resolved !== p.slug) {
         edges.push({ source: p.slug, target: resolved, type: 'wikilink' });
       }

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
-import { paperclipAgents, paperclipIssues, paperclipRuns } from '@/lib/connectors/paperclip';
+import { deliverableDecisions } from '@/founderos/lib/decisions';
+import { paperclipAgents, paperclipIssues, paperclipRuns } from '@/founderos/lib/connectors/paperclip';
 import { getDb } from '@/lib/data';
-import type { BoardLivePayload } from '@/lib/board-live';
+import type { BoardLivePayload } from '@/founderos/lib/board-live';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,7 +24,7 @@ export async function GET() {
   ]);
   // The operator's approve / dismiss calls on board tasks, from the same store the
   // deliverables queue writes to, so the poll never loses one
-  const decisions = getDb().deliverableDecisions.all();
+  const decisions = deliverableDecisions.all();
   const payload: BoardLivePayload = {
     connected: agents.length > 0,
     agents,

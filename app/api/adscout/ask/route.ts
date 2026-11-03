@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 /**
- * Ask Adscout: grounds a question in the synced store (winners, hooks,
+ * Ask Adscout — grounds a question in the synced store (winners, hooks,
  * drivers, signals) and answers via the local Claude CLI. Reads only local
  * snapshots: zero Foreplay credits per question. Honest 503 when the CLI
  * isn't available.
@@ -37,18 +37,18 @@ export async function POST(request: Request) {
 
   if (wall.length === 0 && signals.length === 0) {
     return NextResponse.json(
-      { ok: false, error: 'The ad store is empty: add brands to the watchlist and sync first.' },
+      { ok: false, error: 'The ad store is empty — add brands to the watchlist and sync first.' },
       { status: 409 },
     );
   }
 
   const prompt = [
-    "You are Adscout, the user's ad-intelligence analyst. Answer from the DATA below: competitor ads tracked via Foreplay.",
-    'Rules: days-running-while-live is the only spend proxy (no engagement/spend numbers exist: never invent any).',
+    "You are Adscout, the operator's ad-intelligence analyst. Answer from the DATA below — competitor ads tracked via Foreplay.",
+    'Rules: days-running-while-live is the only spend proxy (no engagement/spend numbers exist — never invent any).',
     'Be direct and specific; cite brands and hooks from the data. 120 words max. Plain text, no markdown.',
     '',
-    `DATA: tracked ads (longevity-ranked): ${JSON.stringify(wall)}`,
-    `DATA: recent signals: ${JSON.stringify(signals)}`,
+    `DATA — tracked ads (longevity-ranked): ${JSON.stringify(wall)}`,
+    `DATA — recent signals: ${JSON.stringify(signals)}`,
     '',
     `QUESTION: ${parsed.data.question}`,
   ].join('\n');

@@ -3,12 +3,14 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { getDb } from '@/lib/data';
 import { PLATFORM_LABELS, platformDetail, syncFromZernioConfig } from '@/lib/social';
-import { platformVolume } from '@/lib/social-volume';
-import type { SocialPlatform } from '@/lib/schemas';
-import { formatFollowers, formatPct, GrowthBadge } from '@/components/SocialStats';
-import { FollowerBarChart } from '@/components/FollowerBarChart';
-import { Slab, SlabTitle, SlabCard, BigStat, MeterStack, InsightCard, PILL, PILL_ACCENT } from '@/components/slab';
-import { StepLine } from '@/components/slab-charts';
+import { platformVolume } from '@/founderos/lib/social-volume';
+import { SocialPlatformSchema, type SocialPlatform } from '@/founderos/lib/schemas';
+import { SetupLink } from '@/components/SetupLink';
+import { setupHrefFor } from '@/lib/integrations-catalog';
+import { formatFollowers, formatPct, GrowthBadge } from '@/founderos/components/SocialStats';
+import { FollowerBarChart } from '@/founderos/components/FollowerBarChart';
+import { Slab, SlabTitle, SlabCard, BigStat, MeterStack, InsightCard, PILL, PILL_ACCENT } from '@/founderos/components/slab';
+import { StepLine } from '@/founderos/components/slab-charts';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,8 +25,23 @@ const WINDOW_DAYS = 30;
 export default function SocialPlatformPage({ params }: { params: { platform: string } }) {
   const db = getDb();
   syncFromZernioConfig(db);
+  if (!SocialPlatformSchema.safeParse(params.platform).success) notFound();
   const detail = platformDetail(db, params.platform as SocialPlatform);
-  if (!detail) notFound();
+  // Not connected yet: say so, and point at Setup (GladOS's honest-or-absent rule).
+  if (!detail) {
+    return (
+      <Slab>
+        <SlabTitle eyebrow="audience" title={PLATFORM_LABELS[params.platform as SocialPlatform]} />
+        <SlabCard i={1} className="p-6">
+          <div className="flex flex-wrap items-center gap-3 text-[13px] text-os-muted">
+            <span className="rounded-full border border-[var(--hairline)] px-2.5 py-[3px] text-[11.5px]">Not configured</span>
+            {PLATFORM_LABELS[params.platform as SocialPlatform]} is not connected yet.
+            <SetupLink href={setupHrefFor('zernio')} />
+          </div>
+        </SlabCard>
+      </Slab>
+    );
+  }
 
   const { account, followers, growth, snapshots } = detail;
   const label = PLATFORM_LABELS[account.platform];

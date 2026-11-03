@@ -1,13 +1,14 @@
-import { paperclipAgents, paperclipIssues, paperclipRuns } from '@/lib/connectors/paperclip';
+import { paperclipAgents, paperclipIssues, paperclipRuns } from '@/founderos/lib/connectors/paperclip';
+import { deliverableDecisions } from '@/founderos/lib/decisions';
 import { getDb } from '@/lib/data';
-import type { BoardLivePayload } from '@/lib/board-live';
+import type { BoardLivePayload } from '@/founderos/lib/board-live';
 import Link from 'next/link';
 import { ArrowUpRight } from 'lucide-react';
-import { Slab, SlabTitle, SlabCard, PILL } from '@/components/slab';
-import { AgentsTabs } from '@/components/AgentsTabs';
-import { BoardLive } from '@/components/BoardLive';
-import { ConductorChat } from '@/components/ConductorChat';
-import { AgentsVolumePanel } from '@/components/AgentsVolumePanel';
+import { Slab, SlabTitle, SlabCard, PILL } from '@/founderos/components/slab';
+import { AgentsTabs } from '@/founderos/components/AgentsTabs';
+import { BoardLive } from '@/founderos/components/BoardLive';
+import { ConductorChat } from '@/founderos/components/ConductorChat';
+import { AgentsVolumePanel } from '@/founderos/components/AgentsVolumePanel';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,7 +35,7 @@ export default async function AgentsPage() {
     paperclipRuns(120),
   ]);
   // decisions come from the repo layer, not the board: an approve is ours
-  const decisions = getDb().deliverableDecisions.all();
+  const decisions = deliverableDecisions.all();
   const boardInitial: BoardLivePayload = {
     connected: liveAgents.length > 0,
     agents: liveAgents,

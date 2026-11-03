@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dateAxis, bucketPostingByDay, forwardFill, postSeriesFromDays, type PostDay } from '@/lib/posting-activity';
+import { dateAxis, bucketPostingByDay, forwardFill, forwardFillCarried, postSeriesFromDays, type PostDay } from '@/lib/posting-activity';
 
 describe('dateAxis', () => {
   it('lists every day inclusive of both ends', () => {
@@ -108,5 +108,36 @@ describe('forwardFill', () => {
   it('uses the exact value on a matching day', () => {
     const filled = forwardFill([{ date: '2026-06-03', value: 42 }], dateAxis('2026-06-03', '2026-06-03'));
     expect(filled).toEqual([42]);
+  });
+});
+
+describe('forwardFillCarried (H17 carry-in)', () => {
+  const axis = dateAxis('2026-09-10', '2026-09-14');
+
+  it('carries in the newest point before the axis, so a stale window still plots', () => {
+    const f = forwardFillCarried(
+      [
+        { date: '2026-08-20', value: 90 },
+        { date: '2026-08-24', value: 100 },
+      ],
+      axis,
+    );
+    expect(f.values).toEqual([100, 100, 100, 100, 100]);
+    expect(f.carried).toEqual([true, true, true, true, true]);
+    expect(f.from.every((d) => d === '2026-08-24')).toBe(true);
+    expect(forwardFill([{ date: '2026-08-24', value: 100 }], axis)).toEqual([100, 100, 100, 100, 100]);
+  });
+
+  it('flags only the gap days as carried', () => {
+    const f = forwardFillCarried(
+      [
+        { date: '2026-09-11', value: 5 },
+        { date: '2026-09-13', value: 7 },
+      ],
+      axis,
+    );
+    expect(f.values).toEqual([null, 5, 5, 7, 7]);
+    expect(f.carried).toEqual([false, false, true, false, true]);
+    expect(f.from).toEqual([null, '2026-09-11', '2026-09-11', '2026-09-13', '2026-09-13']);
   });
 });

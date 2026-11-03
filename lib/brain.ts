@@ -1,19 +1,11 @@
-import { isGated } from '@/lib/gate';
 /**
- * Brain adapter. Four providers:
- * - federated: both stores at once (lib/brain-federated.ts) — governed
- * answers from the engine first, prose chunks from gbrain after. Degrades
- * to gbrain alone on a box where the engine is not running, which is every
- * box except the operator's laptop today.
- * - optimal: the OptimalEngine:4200 (lib/connectors/optimal.ts), the
- * governed claims store the operator chose as the OS brain.
- * - gbrain (default until the env flips): shells out to the gbrain CLI
- * (brain-store markdown + Supabase + Ollama bge-m3) with a local fallback.
- * - stub: inert, for tests.
+ * Optimal Engine adapter. The real provider (default) shells out to the installed
+ * engine CLI (brain-store markdown + Supabase + ZeroEntropy hybrid search)
+ * with a local brain-store fallback when the database is unreachable.
+ * BRAIN_PROVIDER=stub selects the inert provider for tests.
  */
-import { createFederatedBrain } from '@/lib/brain-federated';
+import { brainProviderName } from '@/lib/stores';
 import { createGBrainProvider } from '@/lib/connectors/gbrain';
-import { createOptimalProvider } from '@/lib/connectors/optimal';
 
 export type BrainStatus = {
   connected: boolean;
@@ -25,8 +17,6 @@ export type BrainSearchResult = {
   title: string;
   snippet: string;
   source: string;
-  /** Hybrid-search relevance, when the provider reported one. */
-  score?: number;
 };
 
 export interface BrainProvider {
@@ -51,10 +41,7 @@ const stubProvider: BrainProvider = {
 };
 
 export function getBrainProvider(): BrainProvider {
-  if (isGated()) return createGBrainProvider();
-  const name = process.env.BRAIN_PROVIDER ?? 'federated';
+  const name = brainProviderName();
   if (name === 'stub') return stubProvider;
-  if (name === 'optimal') return createOptimalProvider();
-  if (name === 'federated') return createFederatedBrain();
   return createGBrainProvider();
 }

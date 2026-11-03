@@ -7,29 +7,9 @@
  * status — connected is never faked, a stored key on a connector-less tile
  * reads "key saved". Guidance-only tools (WhatsApp needs Full Disk Access,
  * IMAP inboxes, CalDAV) show their setup hint instead of a form.
- *
- * Mock 3f: connecting is the one action here that reaches a far end, so it is
- * the three-state control — press, "OAuth…" with a spinner, then "✓ connected".
- * The done label reads off the error state rather than assuming success,
- * because a tick over a save that failed is the one lie this screen must not
- * tell. Status is a `.dot`, the same LED every other surface uses.
  */
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AsyncButton } from '@/components/AsyncButton';
-
-/** What the board needs to pick an OAuth affordance, from lib/oauth/store. */
-export type OAuthReadiness = {
-  slug: string;
-  name: string;
-  redirectKind: 'any' | 'loopback' | 'https-public';
-  consoleUrl: string;
-  clientIdEnv: string;
-  clientSecretEnv: string;
-  appConfigured: boolean;
-  connected: boolean;
-  expired: boolean;
-};
 
 export function ConnectFlow({
   slug,
@@ -37,7 +17,6 @@ export function ConnectFlow({
   keySaved,
   keys,
   guidance,
-  oauth,
 }: {
   slug: string;
   connected: boolean;
@@ -45,9 +24,13 @@ export function ConnectFlow({
   keys: string[];
   /** Live connector detail for guidance-only tools (keys.length === 0). */
   guidance?: string;
-  /** Present only for providers that run a real authorization-code flow. */
-  oauth?: OAuthReadiness | null;
 }) {
+  const flow = useConnectFlow(slug);
+  return <ConnectFlowClassic {...flow} connected={connected} keySaved={keySaved} keys={keys} guidance={guidance} />;
+}
+
+/** Paste-a-key form state, save and disconnect, shared by both trees (GladOS: components/integrations/ConnectFlowG.tsx). */
+export function useConnectFlow(slug: string) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -55,12 +38,8 @@ export function ConnectFlow({
   const [error, setError] = useState<string | null>(null);
 
   const save = async () => {
-    setError(null);
-    if (keys.some((k) => !(values[k] ?? '').trim())) {
-      setError('every field is required');
-      return;
-    }
     setBusy(true);
+    setError(null);
     try {
       const res = await fetch('/api/connections/connect', {
         method: 'POST',
@@ -93,24 +72,32 @@ export function ConnectFlow({
       setBusy(false);
     }
   };
+  return { open, setOpen, values, setValues, busy, error, setError, save, disconnect };
+}
 
+function ConnectFlowClassic({
+  open, setOpen, values, setValues, busy, error, setError, save, disconnect, connected, keySaved, keys, guidance,
+}: ReturnType<typeof useConnectFlow> & { connected: boolean; keySaved: boolean; keys: string[]; guidance?: string }) {
   const statusChip = connected ? (
-    <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-os-ok">
+    <span className="flex items-center gap-2.5 text-[12px] text-os-muted">
       <span className="dot ok" />
       Connected
     </span>
   ) : keySaved ? (
-    <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.12em] text-os-warn">
+    <span className="flex items-center gap-2.5 text-[12px] text-os-muted">
       <span className="dot warn" />
       Key saved
     </span>
   ) : (
-    <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-os-dim">Not connected</span>
+    <span className="flex items-center gap-2.5 text-[12px] text-os-dim">
+      <span className="dot off" />
+      Not connected
+    </span>
   );
 
   if (open) {
     return (
-      <div className="mt-3">
+      <div className="mt-4">
         {keys.map((k) => (
           <input
             key={k}
@@ -119,77 +106,40 @@ export function ConnectFlow({
             placeholder={k}
             value={values[k] ?? ''}
             onChange={(e) => setValues((v) => ({ ...v, [k]: e.target.value }))}
-            className="mb-1.5 w-full rounded-ctl border border-os-border bg-os-surface2 px-2 py-1.5 font-mono text-[10.5px] text-os-text placeholder:text-os-dim focus:border-os-border-strong focus:outline-none"
+            className="mb-1.5 w-full rounded-sm-t border border-os-border bg-os-surface2 px-2 py-2.5 font-mono text-[12px] text-os-text placeholder:text-os-dim focus:border-os-border-strong focus:outline-none"
           />
         ))}
-        {error && <div className="mb-1.5 font-mono text-[9.5px] text-os-err">{error}</div>}
-        <div className="flex items-center justify-end gap-2">
+        {error && (
+          <div className="mb-1.5 flex items-center gap-2 text-[11.5px] text-os-muted">
+            <span className="dot err" /> {error}
+          </div>
+        )}
+        <div className="flex items-center justify-end gap-3">
           <button
             type="button"
             onClick={() => {
               setOpen(false);
               setError(null);
             }}
-            data-lens="c"
-            className="pressable rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-os-dim"
+            className="rounded-sm-t px-2.5 py-1 text-[12px] text-os-dim transition-colors hover:text-os-text"
           >
             Cancel
           </button>
-          <AsyncButton
-            run={save}
-            tone="primary"
-            busyLabel="OAuth…"
-            doneLabel={error ? 'failed' : 'connected'}
+          <button
+            type="button"
+            disabled={busy || keys.some((k) => !(values[k] ?? '').trim())}
+            onClick={() => void save()}
+            className="rounded-sm-t bg-os-accent px-3 py-1 text-[12px] font-medium text-os-ink transition-colors hover:bg-os-accent2 disabled:opacity-40"
           >
-            Save &amp; connect
-          </AsyncButton>
+            {busy ? 'Saving…' : 'Save & connect'}
+          </button>
         </div>
       </div>
     );
   }
 
-  // The OAuth strip sits above the key row: it is the preferred path when the
-  // provider supports it, and the key form stays as the fallback.
-  const oauthStrip = oauth ? (
-    <div className="mb-2 border-b border-os-border pb-2">
-      {oauth.redirectKind === 'https-public' ? (
-        // No button: this provider will not accept the http redirect this box
-        // can offer, so offering one would be a button that cannot finish.
-        <div className="font-mono text-[9.5px] leading-relaxed text-os-dim">
-          OAuth needs a public https redirect — put a domain or tunnel in front of the OS first, then
-          register <span className="text-os-muted">/api/oauth/callback</span> at{' '}
-          <a href={oauth.consoleUrl} target="_blank" rel="noreferrer" className="linky text-os-muted">
-            {oauth.name} console
-          </a>
-          .
-        </div>
-      ) : oauth.appConfigured ? (
-        <a
-          href={`/api/oauth/${slug}/start`}
-          data-lens="c"
-          className="pressable is-dark inline-flex items-center gap-1.5 rounded-ctl border border-os-border-strong px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-os-text"
-        >
-          {oauth.connected ? (oauth.expired ? 'Reconnect · expired' : 'Reconnect') : 'Connect with OAuth'}
-        </a>
-      ) : (
-        <div className="font-mono text-[9.5px] leading-relaxed text-os-dim">
-          Register an app at{' '}
-          <a href={oauth.consoleUrl} target="_blank" rel="noreferrer" className="linky text-os-muted">
-            {oauth.name} console
-          </a>{' '}
-          with redirect <span className="text-os-muted">/api/oauth/callback</span>, then save{' '}
-          <span className="text-os-muted">{oauth.clientIdEnv}</span> and{' '}
-          <span className="text-os-muted">{oauth.clientSecretEnv}</span> below.
-          {oauth.redirectKind === 'loopback' && ' This provider allows http only on localhost, so open the OS on the box itself to finish it.'}
-        </div>
-      )}
-    </div>
-  ) : null;
-
   return (
-    <div className="mt-3">
-      {oauthStrip}
-      <div className="flex items-center justify-between">
+    <div className="mt-4 flex items-center justify-between">
       {statusChip}
       {connected || keySaved ? (
         keySaved ? (
@@ -197,15 +147,14 @@ export function ConnectFlow({
             type="button"
             disabled={busy}
             onClick={() => void disconnect()}
-            data-lens="c"
-            className="pressable rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-os-dim disabled:opacity-40"
+            className="rounded-sm-t px-2.5 py-1 text-[12px] text-os-dim transition-colors hover:text-os-text disabled:opacity-40"
           >
             Disconnect
           </button>
         ) : (
           <span
-            title="Credentials managed outside Founder OS (canonical machine files)"
-            className="cursor-default rounded-full px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-os-dim/60"
+            title="Credentials managed outside the console (canonical machine files)"
+            className="c-chip cursor-default"
           >
             Managed
           </span>
@@ -214,19 +163,18 @@ export function ConnectFlow({
         <button
           type="button"
           onClick={() => setOpen(true)}
-          data-lens="c" className="pressable rounded-full border border-os-border-strong px-3 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-os-text hover:bg-os-text hover:text-os-bg"
+          className="rounded-sm-t border border-os-border-strong bg-os-surface2 px-3 py-1 text-[12px] text-os-text transition-colors hover:bg-os-surface3"
         >
-          + Connect
+          Connect
         </button>
       ) : (
         <span
           title={guidance ?? 'Connects through local setup, not a pasted key'}
-          className="cursor-help rounded-full border border-os-border px-3 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-os-dim"
+          className="c-chip cursor-help"
         >
           Setup
         </span>
       )}
-      </div>
     </div>
   );
 }

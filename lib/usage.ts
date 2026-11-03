@@ -1,145 +1,57 @@
 /**
- * Token-burn accounting across the model subscriptions Alex actually pays
- * for: ONE Claude plan (burned from the MacBook and the mini), ONE ChatGPT
- * plan (Codex), and ONE Ollama plan. Every token is attributed to the lane
- * that burned it (the agent board, Superset sessions, plain terminal
- * sessions, crons/headless runs) across the last hour, the 5-hour session
- * window, today and the week.
+ * Token burn per plan (Claude, ChatGPT/Codex, Ollama), per model and per
+ * machine (pages/usage.md §2). Line parsers ported from the 2026-10-06 parts
+ * bin (lib/usage.ts); the reader and the summary are written for this build.
  *
- * Why this exists: the 2026-08-25 weekly-limit burn. Two 300k+ sessions ate
- * 73% of a week's Claude allowance before anyone noticed, because the only
- * gauge was `/usage` inside a running session. This module turns the local
- * evidence every CLI already writes to disk into one board, so "which seat do
- * I burn next" is a glance, not an incident.
- *
- * Sources are deliberately free and local -- no LLM, no paid API in the
- * refresh path:
+ * Sources, all free and local (no LLM, no paid API):
  *   - Claude Code appends per-message `usage` blocks to
- *     ~/.claude/projects/**\/*.jsonl. Raw tokens, by model, by day. That is a
- *     burn ESTIMATE: Anthropic does not publish the weekly-limit formula, and
- *     this box's Keychain carries no OAuth token to ask the official number.
- *   - Codex logs `token_count` events that include the plan's OFFICIAL
- *     `used_percent` for the 5-hour and 7-day windows. Those are real gauge
- *     values, just as stale as the last time the CLI ran.
- *   - Ollama publishes no usage API at all; its lane is status-only and says
- *     so rather than faking a bar.
+ *     ~/.claude/projects/**\/*.jsonl (CLAUDE_PROJECTS_DIR overrides).
+ *   - Codex logs cumulative `token_count` events, which also carry the plan's
+ *     OFFICIAL used_percent for its 5-hour and weekly windows
+ *     (~/.codex/sessions, CODEX_SESSIONS_DIR overrides).
+ *   - Ollama has no usage API: its card is status only (GET /api/ps on
+ *     127.0.0.1), unless a machine pushes Ollama readings.
+ *   - Other machines push their readings (POST /api/usage/push, usage_readings).
  *
- * Everything here is pure and fed by the connectors; the one impure surface
- * is the repo (usage_snapshots) where OTHER machines push their seat reading.
+ * Burn = input + output + cache writes; cache reads are not counted (FO rule).
+ * A plan no source reported is "not reported", never 0 (U-2). An official
+ * gauge appears only when a provider reported one (U-3).
+ *
+ * The page never parses on its request (U-4): readLocalUsage() keeps a 60 s
+ * cache, serves a stale value while one refresh runs behind it, and folds
+ * transcripts incrementally (per-file offsets), so a poll costs a stat.
  */
-import { z } from 'zod';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import type { UsagePlan, UsageReading } from '@/lib/schemas';
 
-// ── shapes ──────────────────────────────────────────────────────────────────
+export const USAGE_REFRESH_MS = 60_000;
+/** A pushed machine older than this is shown stale (FO STALE_PUSH). */
+export const STALE_PUSH_MS = 15 * 60_000;
+const KEEP_DAYS = 31;
+const DAY = 86_400_000;
 
-export const OfficialWindowSchema = z.object({
-  usedPercent: z.number().min(0),
-  windowMinutes: z.number().int().positive(),
-  resetsAt: z.string().nullable(),
-});
-export type OfficialWindow = z.infer<typeof OfficialWindowSchema>;
+export type Tot = { input: number; output: number; cacheWrite: number };
+export const burnOf = (t: Tot) => t.input + t.output + t.cacheWrite;
 
-export const DayBucketSchema = z.object({
-  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  in: z.number().min(0),
-  out: z.number().min(0),
-  cacheWrite: z.number().min(0),
-  cacheRead: z.number().min(0),
-});
-export type DayBucket = z.infer<typeof DayBucketSchema>;
-
-const TotSchema = z.object({ in: z.number(), out: z.number(), cacheWrite: z.number(), cacheRead: z.number() });
-export type Tot = z.infer<typeof TotSchema>;
-const ModelTotalsSchema = z.record(TotSchema);
-
-/** The lanes tokens burn in. */
-export const BURN_SOURCES = ['board', 'sessions', 'terminal', 'automation'] as const;
-export type BurnSource = (typeof BURN_SOURCES)[number];
-export const SOURCE_LABEL: Record<BurnSource, string> = {
-  board: 'Agent board',
-  sessions: 'My sessions · Superset',
-  terminal: 'Terminal',
-  automation: 'Crons & headless',
-};
-
-export const WINDOWS = ['hour', 'session', 'day', 'week'] as const;
-export type UsageWindow = (typeof WINDOWS)[number];
-export const WINDOW_LABEL: Record<UsageWindow, string> = { hour: 'last hour', session: '5h session', day: 'today', week: '7 days' };
-
-const LaneTotsSchema = z.object({ board: TotSchema, sessions: TotSchema, terminal: TotSchema, automation: TotSchema });
-export type LaneTots = z.infer<typeof LaneTotsSchema>;
-
-export const BreakdownSchema = z.object({
-  windows: z.object({ hour: LaneTotsSchema, session: LaneTotsSchema, day: LaneTotsSchema, week: LaneTotsSchema }),
-  /** The biggest burners this week: board seats, worktrees, projects. */
-  top: z.array(z.object({ source: z.enum(BURN_SOURCES), label: z.string(), burn: z.number().min(0) })),
-});
-export type Breakdown = z.infer<typeof BreakdownSchema>;
-
-export const UsageSnapshotSchema = z.object({
-  id: z.string().min(1),
-  kind: z.enum(['claude', 'codex']),
-  label: z.string().min(1),
-  /** 'local' = computed on this box just now; 'push' = another machine sent it. */
-  source: z.enum(['local', 'push']),
-  capturedAt: z.string().min(1),
-  /** Oldest → today. Fixed length so cards line up across seats. */
-  days: z.array(DayBucketSchema),
-  byModel: ModelTotalsSchema,
-  lastActivity: z.string().nullable(),
-  /** Real plan gauges when a CLI recorded them; null means estimate-only. */
-  official: z
-    .object({ session: OfficialWindowSchema.optional(), weekly: OfficialWindowSchema.optional() })
-    .nullable(),
-  note: z.string().optional(),
-  /** Where the burn went; optional so older pushed snapshots still parse. */
-  breakdown: BreakdownSchema.optional(),
-  /** Plan name as the provider reports it ("Claude Max 5x"), when known. */
-  plan: z.string().nullable().optional(),
-});
-export type SeatUsage = z.infer<typeof UsageSnapshotSchema>;
-
-export const USAGE_WINDOW_DAYS = 7;
-/** A pushed snapshot older than this is shown as stale. */
-export const STALE_PUSH_MS = 24 * 3600_000;
-
-// ── day math ────────────────────────────────────────────────────────────────
-
-/** Local-timezone calendar day for an ISO timestamp: the day Alex lived. */
-export function dayKey(ts: string): string {
+/** Local calendar day for an ISO timestamp: the day the operator lived. */
+export function dayKey(ts: string | number | Date): string {
   const d = new Date(ts);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
-export function emptyDays(now: Date, days: number): DayBucket[] {
-  const out: DayBucket[] = [];
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(now.getTime() - i * 24 * 3600_000);
-    out.push({ day: dayKey(d.toISOString()), in: 0, out: 0, cacheWrite: 0, cacheRead: 0 });
-  }
-  return out;
-}
+const pos = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? Math.round(v) : 0);
 
-// ── Claude transcript lines ─────────────────────────────────────────────────
+// ── line parsers (pure) ────────────────────────────────────────────────────
 
-export type ParsedUsageLine = {
-  ts: string;
-  model: string;
-  cwd?: string;
-  entrypoint?: string;
-  sidechain?: boolean;
-  in: number;
-  out: number;
-  cacheWrite: number;
-  cacheRead: number;
-};
+export type ClaudeLine = { ts: string; model: string; cwd?: string; entrypoint?: string } & Tot;
 
-const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : 0);
-
-/** One transcript JSONL line → token counters, or null for anything that is
-    not an assistant message with a usage block. Zeros are not evidence. */
-export function parseClaudeLine(line: string): ParsedUsageLine | null {
-  if (!line.trim()) return null;
+/** One Claude transcript line → counters, or null for anything that is not an
+ *  assistant message with a usage block. */
+export function parseClaudeLine(line: string): ClaudeLine | null {
+  if (!line.includes('"usage"')) return null;
   let d: Record<string, unknown>;
   try {
     d = JSON.parse(line) as Record<string, unknown>;
@@ -148,482 +60,410 @@ export function parseClaudeLine(line: string): ParsedUsageLine | null {
   }
   if (d.type !== 'assistant' || typeof d.timestamp !== 'string') return null;
   const msg = d.message as { model?: unknown; usage?: Record<string, unknown> } | undefined;
-  const usage = msg?.usage;
-  if (!usage) return null;
+  const u = msg?.usage;
+  if (!u) return null;
   return {
     ts: d.timestamp,
-    model: typeof msg?.model === 'string' ? msg.model : 'unknown',
-    cwd: typeof d.cwd === 'string' ? d.cwd : undefined,
-    entrypoint: typeof d.entrypoint === 'string' ? d.entrypoint : undefined,
-    sidechain: d.isSidechain === true,
-    in: num(usage.input_tokens),
-    out: num(usage.output_tokens),
-    cacheWrite: num(usage.cache_creation_input_tokens),
-    cacheRead: num(usage.cache_read_input_tokens),
+    model: typeof msg?.model === 'string' && msg.model ? msg.model : 'unknown',
+    input: pos(u.input_tokens),
+    output: pos(u.output_tokens),
+    cacheWrite: pos(u.cache_creation_input_tokens),
+    ...(typeof d.cwd === 'string' ? { cwd: d.cwd } : {}),
+    ...(typeof d.entrypoint === 'string' ? { entrypoint: d.entrypoint } : {}),
   };
 }
 
-/** Mutating fold: cheap, and the connector folds millions of lines. Entries
-    outside the day window are dropped, never misfiled onto an edge day. */
-export function foldInto(days: DayBucket[], byModel: SeatUsage['byModel'], p: ParsedUsageLine): void {
-  const key = dayKey(p.ts);
-  const bucket = days.find((d) => d.day === key);
-  if (!bucket) return;
-  bucket.in += p.in;
-  bucket.out += p.out;
-  bucket.cacheWrite += p.cacheWrite;
-  bucket.cacheRead += p.cacheRead;
-  const m = (byModel[p.model] ??= { in: 0, out: 0, cacheWrite: 0, cacheRead: 0 });
-  m.in += p.in;
-  m.out += p.out;
-  m.cacheWrite += p.cacheWrite;
-  m.cacheRead += p.cacheRead;
-}
+// ── lanes: where the tokens burn (FO `sources`, ported from the parts bin) ──
 
-/** "Burn" = tokens that are new work for the provider: input + output + cache
-    writes. Cache READS are shown separately -- they are re-read context, the
-    88%-of-spend problem, but they are not the same axis. */
-export function burnOf(b: { in: number; out: number; cacheWrite: number }): number {
-  return b.in + b.out + b.cacheWrite;
-}
-
-export function totalBurn(days: DayBucket[]): number {
-  return days.reduce((s, d) => s + burnOf(d), 0);
-}
-
-// ── Codex session events ────────────────────────────────────────────────────
-
-export type CodexRateLimits = { session?: OfficialWindow; weekly?: OfficialWindow; planType?: string };
-export type ParsedCodexLine = {
-  ts: string;
-  /** Cumulative for the session, as Codex reports it -- NOT a delta. */
-  cumulative: { in: number; out: number; cacheRead: number };
-  rateLimits: CodexRateLimits | null;
+/** The lanes tokens burn in, in display order. */
+export const BURN_LANES = ['board', 'sessions', 'terminal', 'automation'] as const;
+export type BurnLane = (typeof BURN_LANES)[number];
+export const LANE_LABEL: Record<BurnLane, string> = {
+  board: 'Agent board',
+  sessions: 'My sessions',
+  terminal: 'Terminal',
+  automation: 'Crons and headless',
 };
 
-function codexWindow(w: unknown): OfficialWindow | undefined {
-  const o = w as { used_percent?: unknown; window_minutes?: unknown; resets_at?: unknown } | undefined;
-  if (!o || typeof o.used_percent !== 'number' || typeof o.window_minutes !== 'number') return undefined;
-  return {
-    usedPercent: o.used_percent,
-    windowMinutes: o.window_minutes,
-    resetsAt: typeof o.resets_at === 'number' ? new Date(o.resets_at * 1000).toISOString() : null,
-  };
+/** Board seats and Superset sessions, from the working directory. */
+function laneFromCwd(cwd: string | undefined): BurnLane | null {
+  if (!cwd) return null;
+  if (cwd.includes('/.paperclip/')) return 'board';
+  if (/\/\.superset\/(worktrees|projects)\//.test(cwd)) return 'sessions';
+  return null;
 }
 
-export function parseCodexLine(line: string): ParsedCodexLine | null {
-  if (!line.trim()) return null;
+/** One Claude transcript line → its lane. Headless (sdk-*) runs outside the
+ *  board are crons and scripts; anything else interactive is a terminal. */
+export function classifyClaude(x: { cwd?: string; entrypoint?: string }): BurnLane {
+  return laneFromCwd(x.cwd) ?? (x.entrypoint?.startsWith('sdk') ? 'automation' : 'terminal');
+}
+
+/** One Codex session → its lane, from session_meta's cwd and originator. */
+export function classifyCodex(x: { cwd?: string; originator?: string; source?: string }): BurnLane {
+  return laneFromCwd(x.cwd) ?? (x.originator === 'codex_exec' || x.source === 'exec' ? 'automation' : 'terminal');
+}
+
+/** A Codex `session_meta` line → where the session ran, or null. */
+export function parseCodexMeta(line: string): { cwd?: string; originator?: string; source?: string } | null {
+  if (!line.includes('session_meta')) return null;
+  try {
+    const d = JSON.parse(line) as { type?: unknown; payload?: Record<string, unknown> };
+    if (d.type !== 'session_meta' || !d.payload) return null;
+    const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+    return { cwd: str(d.payload.cwd), originator: str(d.payload.originator), source: str(d.payload.source) };
+  } catch {
+    return null;
+  }
+}
+
+export type OfficialWindow = { usedPercent: number; windowMinutes: number; resetsAt: string | null };
+export type CodexLine = { ts: string; cumulative: { input: number; output: number }; session: OfficialWindow | null; weekly: OfficialWindow | null };
+
+function codexWindow(w: unknown): OfficialWindow | null {
+  const o = w as { used_percent?: unknown; window_minutes?: unknown; resets_at?: unknown } | undefined;
+  if (!o || typeof o.used_percent !== 'number' || typeof o.window_minutes !== 'number') return null;
+  return { usedPercent: o.used_percent, windowMinutes: o.window_minutes, resetsAt: typeof o.resets_at === 'number' ? new Date(o.resets_at * 1000).toISOString() : null };
+}
+
+/** A Codex `token_count` event: CUMULATIVE for its session, plus any official gauge. */
+export function parseCodexLine(line: string): CodexLine | null {
+  if (!line.includes('token_count')) return null;
   let d: Record<string, unknown>;
   try {
     d = JSON.parse(line) as Record<string, unknown>;
   } catch {
     return null;
   }
-  const payload = d.payload as
-    | { type?: unknown; info?: { total_token_usage?: Record<string, unknown> }; rate_limits?: Record<string, unknown> }
-    | undefined;
+  const payload = d.payload as { type?: unknown; info?: { total_token_usage?: Record<string, unknown> }; rate_limits?: Record<string, unknown> } | undefined;
   if (d.type !== 'event_msg' || payload?.type !== 'token_count') return null;
   const t = payload.info?.total_token_usage;
-  if (!t) return null;
-  const rl = payload.rate_limits;
-  // Assign by window length, not by slot: Codex has reported the weekly
-  // window as `primary` with no `secondary` since 2026-09.
-  let session: OfficialWindow | undefined;
-  let weekly: OfficialWindow | undefined;
-  for (const w of rl ? [codexWindow(rl.primary), codexWindow(rl.secondary)] : []) {
+  if (!t || typeof d.timestamp !== 'string') return null;
+  let session: OfficialWindow | null = null;
+  let weekly: OfficialWindow | null = null;
+  // Assign by window length, not slot: Codex reports the weekly window as `primary` at times.
+  for (const w of payload.rate_limits ? [codexWindow(payload.rate_limits.primary), codexWindow(payload.rate_limits.secondary)] : []) {
     if (!w) continue;
     if (w.windowMinutes >= 7 * 24 * 60 * 0.9) weekly = w;
     else session = w;
   }
-  const planType = typeof rl?.plan_type === 'string' ? rl.plan_type : undefined;
-  return {
-    ts: typeof d.timestamp === 'string' ? d.timestamp : '',
-    cumulative: { in: num(t.input_tokens), out: num(t.output_tokens), cacheRead: num(t.cached_input_tokens) },
-    rateLimits: session || weekly ? { session, weekly, ...(planType ? { planType } : {}) } : null,
-  };
+  return { ts: d.timestamp, cumulative: { input: pos(t.input_tokens), output: pos(t.output_tokens) }, session, weekly };
 }
 
-/** A session's worth of token_count events → its final totals plus the last
-    rate-limit gauge the CLI printed. Cumulative counters: last one wins. */
-export function codexSessionFold(events: ParsedCodexLine[]): {
-  ts: string;
-  cumulative: ParsedCodexLine['cumulative'];
-  rateLimits: CodexRateLimits | null;
-} {
-  let ts = '';
-  let cumulative = { in: 0, out: 0, cacheRead: 0 };
-  let rateLimits: CodexRateLimits | null = null;
-  for (const e of events) {
-    ts = e.ts || ts;
-    cumulative = e.cumulative;
-    if (e.rateLimits) rateLimits = e.rateLimits;
-  }
-  return { ts, cumulative, rateLimits };
-}
+// ── the local reader (incremental, cached) ─────────────────────────────────
 
-/** 1234567 → "1.2M" -- the board is a gauge, not an invoice. */
-export function fmtTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
-}
+type FileState = {
+  size: number;
+  offset: number;
+  mtimeMs: number;
+  perDayModel: Record<string, Record<string, Tot>>;
+  /** Claude: burn per day per lane, folded with the models */
+  perDayLane: Record<string, Partial<Record<BurnLane, number>>>;
+  codexLast: CodexLine | null;
+  /** Codex: the session's lane from its session_meta line */
+  codexLane: BurnLane | null;
+};
+const newFileState = (): FileState => ({ size: 0, offset: 0, mtimeMs: 0, perDayModel: {}, perDayLane: {}, codexLast: null, codexLane: null });
 
-// ── where the tokens go ─────────────────────────────────────────────────────
+/** This machine's burn per plan, day and lane (pushes carry no lanes). */
+export type LaneReading = { plan: UsagePlan; day: string; lane: BurnLane; burn: number };
 
-export type Lane = { source: BurnSource; label: string };
-
-const basename = (p: string | undefined): string => {
-  if (!p) return 'unknown';
-  if (/^\/(private\/)?(tmp|var\/folders)(\/|$)/.test(p)) return 'tmp'; // macOS temp dirs end in a bare "T"
-  return p.replace(/\/+$/, '').split('/').pop() || 'unknown';
+export type LocalUsage = {
+  machine: string;
+  /** Rows shaped like pushed readings, pushedAt = when this read ran. */
+  readings: UsageReading[];
+  /** Burn per lane on this machine only. */
+  lanes: LaneReading[];
+  /** Which local sources exist on this machine (a missing folder is not 0). */
+  sources: { claude: boolean; codex: boolean };
+  official: { codex: { session: OfficialWindow | null; weekly: OfficialWindow | null; at: string } | null };
+  readAt: string;
+  parseMs: number;
 };
 
-/** Board seats, Superset sessions and everything else, from the working dir. */
-function laneFromCwd(cwd: string | undefined): Lane | null {
-  if (!cwd) return null;
-  if (cwd.includes('/.paperclip/')) {
-    const seat = cwd.match(/\/workspaces\/([^/]+)/)?.[1];
-    return { source: 'board', label: seat ?? 'board project' };
-  }
-  const wt = cwd.match(/\/\.superset\/worktrees\/(.+)$/)?.[1]?.split('/').filter(Boolean);
-  if (wt?.length) return { source: 'sessions', label: wt.length > 1 ? `${wt[0]} · ${wt[wt.length - 1]}` : wt[0] };
-  const pj = cwd.match(/\/\.superset\/projects\/([^/]+)/)?.[1];
-  if (pj) return { source: 'sessions', label: pj };
-  return null;
+export function claudeDir(): string {
+  return process.env.CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
+}
+export function codexDir(): string {
+  return process.env.CODEX_SESSIONS_DIR || path.join(os.homedir(), '.codex', 'sessions');
+}
+export function machineName(): string {
+  return (process.env.GLADOS_USAGE_MACHINE || os.hostname().replace(/\.local$/i, '')).slice(0, 120) || 'this machine';
 }
 
-/** One Claude transcript line → its lane. Headless (sdk-*) runs outside the
-    board are crons and scripts; anything else interactive is a terminal. */
-export function classifyClaude(x: { cwd?: string; entrypoint?: string }): Lane {
-  const lane = laneFromCwd(x.cwd);
-  if (lane) return lane;
-  if (x.entrypoint?.startsWith('sdk')) return { source: 'automation', label: basename(x.cwd) };
-  return { source: 'terminal', label: basename(x.cwd) };
-}
-
-/** One Codex session → its lane, from session_meta's cwd + originator. */
-export function classifyCodex(x: { cwd?: string; originator?: string; source?: string; board?: boolean }): Lane {
-  const lane = laneFromCwd(x.cwd);
-  // a seat's own CODEX_HOME is the board, whichever tree it was pointed at
-  if (x.board) return lane?.source === 'board' ? lane : { source: 'board', label: basename(x.cwd) };
-  if (lane) return lane;
-  if (x.originator === 'codex_exec' || x.source === 'exec') return { source: 'automation', label: basename(x.cwd) };
-  return { source: 'terminal', label: basename(x.cwd) };
-}
-
-/** 10-minute slots: fine enough for an honest "last hour", sparse enough to keep per file. */
-export const SLOT_MS = 10 * 60_000;
-/** slot index (floor(ms / SLOT_MS)) → "source|label" → tokens */
-export type SlotMap = Record<string, Record<string, Tot>>;
-
-const zeroTot = (): Tot => ({ in: 0, out: 0, cacheWrite: 0, cacheRead: 0 });
-const addTot = (a: Tot, b: Tot) => {
-  a.in += b.in;
-  a.out += b.out;
-  a.cacheWrite += b.cacheWrite;
-  a.cacheRead += b.cacheRead;
-};
-const zeroLanes = (): LaneTots => ({ board: zeroTot(), sessions: zeroTot(), terminal: zeroTot(), automation: zeroTot() });
-
-export function slotKey(ts: string): string {
-  return String(Math.floor(new Date(ts).getTime() / SLOT_MS));
-}
-
-export function addToSlots(slots: SlotMap, ts: string, lane: Lane, t: Tot): void {
-  const k = slotKey(ts);
-  if (k === 'NaN') return;
-  const bucket = (slots[k] ??= {});
-  addTot((bucket[`${lane.source}|${lane.label}`] ??= zeroTot()), t);
-}
-
-/** Drop slots older than the week so long-lived caches stay bounded. */
-export function pruneSlots(slots: SlotMap, now: Date, days = USAGE_WINDOW_DAYS + 1): void {
-  const floor = Math.floor((now.getTime() - days * 86400_000) / SLOT_MS);
-  for (const k of Object.keys(slots)) if (Number(k) < floor) delete slots[k];
-}
-
-/** Fold slot maps (one per file/session) into the four windows by lane. */
-export function breakdownFromSlots(maps: SlotMap[], now: Date, days: DayBucket[]): Breakdown {
-  const windows = { hour: zeroLanes(), session: zeroLanes(), day: zeroLanes(), week: zeroLanes() };
-  const hourFloor = Math.floor((now.getTime() - 3600_000) / SLOT_MS);
-  const sessionFloor = Math.floor((now.getTime() - 5 * 3600_000) / SLOT_MS);
-  const today = dayKey(now.toISOString());
-  const weekDays = new Set(days.map((d) => d.day));
-  const byKey = new Map<string, Tot>();
-  for (const m of maps) {
-    for (const [k, lanes] of Object.entries(m)) {
-      const idx = Number(k);
-      const day = dayKey(new Date(idx * SLOT_MS).toISOString());
-      if (!weekDays.has(day)) continue;
-      for (const [key, t] of Object.entries(lanes)) {
-        const source = key.slice(0, key.indexOf('|')) as BurnSource;
-        if (!BURN_SOURCES.includes(source)) continue;
-        addTot(windows.week[source], t);
-        addTot((byKey.get(key) ?? byKey.set(key, zeroTot()).get(key)!), t);
-        if (day === today) addTot(windows.day[source], t);
-        if (idx >= sessionFloor) addTot(windows.session[source], t);
-        if (idx >= hourFloor) addTot(windows.hour[source], t);
+function listJsonl(dir: string, newerThanMs: number, maxDepth: number): { file: string; size: number; mtimeMs: number }[] {
+  const out: { file: string; size: number; mtimeMs: number }[] = [];
+  const walk = (d: string, depth: number) => {
+    if (depth > maxDepth) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p, depth + 1);
+      else if (e.isFile() && e.name.endsWith('.jsonl')) {
+        try {
+          const st = fs.statSync(p);
+          if (st.mtimeMs >= newerThanMs) out.push({ file: p, size: st.size, mtimeMs: st.mtimeMs });
+        } catch {
+          /* raced deletion */
+        }
       }
     }
-  }
-  const top = [...byKey.entries()]
-    .map(([key, t]) => ({ source: key.slice(0, key.indexOf('|')) as BurnSource, label: key.slice(key.indexOf('|') + 1), burn: burnOf(t) }))
-    .filter((x) => x.burn > 0)
-    .sort((a, b) => b.burn - a.burn)
-    .slice(0, 16);
-  return { windows, top };
-}
-
-export function mergeBreakdowns(list: Breakdown[]): Breakdown | undefined {
-  if (!list.length) return undefined;
-  const out: Breakdown = { windows: { hour: zeroLanes(), session: zeroLanes(), day: zeroLanes(), week: zeroLanes() }, top: [] };
-  const top = new Map<string, Breakdown['top'][number]>();
-  for (const b of list) {
-    for (const w of WINDOWS) for (const s of BURN_SOURCES) addTot(out.windows[w][s], b.windows[w][s]);
-    for (const t of b.top) {
-      const key = `${t.source}|${t.label}`;
-      const hit = top.get(key);
-      if (hit) hit.burn += t.burn;
-      else top.set(key, { ...t });
-    }
-  }
-  out.top = [...top.values()].sort((a, b) => b.burn - a.burn).slice(0, 16);
+  };
+  walk(dir, 0);
   return out;
 }
 
-export const laneBurn = (l: LaneTots): number => BURN_SOURCES.reduce((a, s) => a + burnOf(l[s]), 0);
+/** Read the complete lines appended since `state.offset`. */
+function tailLines(file: string, state: FileState, size: number): string[] {
+  if (size < state.size) {
+    // rewritten shorter: start again
+    state.offset = 0;
+    state.perDayModel = {};
+    state.perDayLane = {};
+    state.codexLast = null;
+    state.codexLane = null;
+  }
+  if (size <= state.offset) return [];
+  const fd = fs.openSync(file, 'r');
+  try {
+    const len = size - state.offset;
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, state.offset);
+    const text = buf.toString('utf8');
+    const lastNl = text.lastIndexOf('\n');
+    if (lastNl < 0) return []; // partial line: fold it next time, once complete
+    state.offset += Buffer.byteLength(text.slice(0, lastNl + 1), 'utf8');
+    return text.slice(0, lastNl).split('\n');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
-export type WindowRow = {
-  window: UsageWindow;
-  burn: number;
-  /** this window's burn as a share of the 7-day burn */
-  shareOfWeek: number;
-  /** ESTIMATED share of the weekly plan limit: official weekly % × shareOfWeek; null without an official gauge */
-  pctOfWeekly: number | null;
-};
+type ReaderCache = { files: Map<string, FileState>; value: LocalUsage | null; at: number; pending: Promise<LocalUsage> | null };
+const g = globalThis as typeof globalThis & { __gladosUsage?: ReaderCache };
+const cache: ReaderCache = (g.__gladosUsage ??= { files: new Map(), value: null, at: 0, pending: null });
 
-export function windowTable(b: Breakdown, weeklyPct: number | null): WindowRow[] {
-  const week = laneBurn(b.windows.week);
-  return WINDOWS.map((w) => {
-    const burn = laneBurn(b.windows[w]);
-    const shareOfWeek = week > 0 ? burn / week : 0;
-    return { window: w, burn, shareOfWeek, pctOfWeekly: weeklyPct === null ? null : weeklyPct * shareOfWeek };
+/** Test hook. */
+export function resetUsageCache(): void {
+  cache.files.clear();
+  cache.value = null;
+  cache.at = 0;
+  cache.pending = null;
+}
+
+/** One full pass over this machine's transcripts (incremental per file). */
+export function scanLocalUsage(now: Date = new Date()): LocalUsage {
+  const started = Date.now();
+  const since = now.getTime() - KEEP_DAYS * DAY;
+  const keepFrom = dayKey(since);
+  const readAt = now.toISOString();
+  const machine = machineName();
+  const agg = new Map<string, Tot>(); // plan|day|model
+  const add = (plan: UsagePlan, day: string, model: string, t: Tot) => {
+    if (day < keepFrom) return;
+    const k = `${plan}|${day}|${model}`;
+    const cur = agg.get(k) ?? { input: 0, output: 0, cacheWrite: 0 };
+    agg.set(k, { input: cur.input + t.input, output: cur.output + t.output, cacheWrite: cur.cacheWrite + t.cacheWrite });
+  };
+  const laneAgg = new Map<string, number>(); // plan|day|lane
+  const addLane = (plan: UsagePlan, day: string, lane: BurnLane, burn: number) => {
+    if (day < keepFrom || burn <= 0) return;
+    const k = `${plan}|${day}|${lane}`;
+    laneAgg.set(k, (laneAgg.get(k) ?? 0) + burn);
+  };
+  const seen = new Set<string>();
+
+  const cDir = claudeDir();
+  const claudeExists = fs.existsSync(cDir);
+  if (claudeExists) {
+    for (const f of listJsonl(cDir, since, 3)) {
+      seen.add(f.file);
+      const st = cache.files.get(f.file) ?? newFileState();
+      for (const line of tailLines(f.file, st, f.size)) {
+        const p = parseClaudeLine(line);
+        if (!p) continue;
+        const day = dayKey(p.ts);
+        const m = ((st.perDayModel[day] ??= {})[p.model] ??= { input: 0, output: 0, cacheWrite: 0 });
+        m.input += p.input;
+        m.output += p.output;
+        m.cacheWrite += p.cacheWrite;
+        const lane = classifyClaude(p);
+        const l = (st.perDayLane[day] ??= {});
+        l[lane] = (l[lane] ?? 0) + burnOf(p);
+      }
+      st.size = f.size;
+      st.mtimeMs = f.mtimeMs;
+      cache.files.set(f.file, st);
+      for (const [day, models] of Object.entries(st.perDayModel)) for (const [model, t] of Object.entries(models)) add('claude', day, model, t);
+      for (const [day, lanes] of Object.entries(st.perDayLane)) for (const [lane, b] of Object.entries(lanes)) addLane('claude', day, lane as BurnLane, b ?? 0);
+    }
+  }
+
+  const xDir = codexDir();
+  const codexExists = fs.existsSync(xDir);
+  let official: LocalUsage['official']['codex'] = null;
+  if (codexExists) {
+    for (const f of listJsonl(xDir, since, 4)) {
+      seen.add(f.file);
+      const st = cache.files.get(f.file) ?? newFileState();
+      for (const line of tailLines(f.file, st, f.size)) {
+        const meta = st.codexLane ? null : parseCodexMeta(line);
+        if (meta) st.codexLane = classifyCodex(meta);
+        const p = parseCodexLine(line);
+        if (p) st.codexLast = { ...p, session: p.session ?? st.codexLast?.session ?? null, weekly: p.weekly ?? st.codexLast?.weekly ?? null };
+      }
+      st.size = f.size;
+      st.mtimeMs = f.mtimeMs;
+      cache.files.set(f.file, st);
+      const last = st.codexLast;
+      if (!last) continue;
+      // Cumulative per session: the session's final total lands on its last day.
+      add('codex', dayKey(last.ts), 'codex', { input: last.cumulative.input, output: last.cumulative.output, cacheWrite: 0 });
+      addLane('codex', dayKey(last.ts), st.codexLane ?? 'terminal', last.cumulative.input + last.cumulative.output);
+      if ((last.session || last.weekly) && (!official || last.ts > official.at)) official = { session: last.session, weekly: last.weekly, at: last.ts };
+    }
+  }
+  for (const k of [...cache.files.keys()]) if (!seen.has(k)) cache.files.delete(k);
+
+  const readings: UsageReading[] = [...agg.entries()].map(([k, t]) => {
+    const [plan, day, model] = k.split('|') as [UsagePlan, string, string];
+    return { machine, plan, day, model, input: t.input, output: t.output, cacheWrite: t.cacheWrite, pushedAt: readAt };
   });
+  const lanes: LaneReading[] = [...laneAgg.entries()].map(([k, burn]) => {
+    const [plan, day, lane] = k.split('|') as [UsagePlan, string, BurnLane];
+    return { plan, day, lane, burn };
+  });
+  return { machine, readings, lanes, sources: { claude: claudeExists, codex: codexExists }, official: { codex: official }, readAt, parseMs: Date.now() - started };
 }
-
-/** Board seat ids → agent names, when the board answered. */
-export function nameBoardLabels(b: Breakdown, names: Record<string, string>): Breakdown {
-  const nameOf = (label: string) => names[label] ?? Object.entries(names).find(([id]) => id.startsWith(label) || label.startsWith(id))?.[1];
-  return { ...b, top: b.top.map((t) => (t.source === 'board' ? { ...t, label: nameOf(t.label) ?? t.label } : t)) };
-}
-
-// ── one plan per provider ───────────────────────────────────────────────────
-
-export type PlanMachine = { id: string; label: string; source: SeatUsage['source']; capturedAt: string; lastActivity: string | null; stale: boolean };
-export type PlanUsage = {
-  plan: string | null;
-  official: SeatUsage['official'];
-  days: DayBucket[];
-  byModel: SeatUsage['byModel'];
-  breakdown: Breakdown | undefined;
-  lastActivity: string | null;
-  machines: PlanMachine[];
-  /** set when reporting machines are logged into DIFFERENT plans: "Claude Max 20x (Claude · mini)" per plan */
-  planConflict?: string[];
-  note?: string;
-};
-
-/** Every machine's reading of the SAME plan, summed. The gauge comes from the
-    freshest reading that has one; machines stay listed so nothing is hidden. */
-export function combineSeats(seats: SeatUsage[], now: Date = new Date()): PlanUsage | null {
-  if (!seats.length) return null;
-  const days = seats[0].days.map((d) => ({ ...d, in: 0, out: 0, cacheWrite: 0, cacheRead: 0 }));
-  const byModel: SeatUsage['byModel'] = {};
-  for (const s of seats) {
-    for (const d of s.days) {
-      const b = days.find((x) => x.day === d.day);
-      if (b) addTot(b, d);
-    }
-    for (const [m, t] of Object.entries(s.byModel)) addTot((byModel[m] ??= zeroTot()), t);
-  }
-  const withGauge = seats.filter((s) => s.official).sort((a, b) => b.capturedAt.localeCompare(a.capturedAt));
-  const plans = new Map<string, string>();
-  for (const s of seats) if (s.plan && !plans.has(s.plan)) plans.set(s.plan, s.label);
-  const last = seats.map((s) => s.lastActivity).filter((x): x is string => Boolean(x)).sort().at(-1) ?? null;
-  return {
-    plan: seats.find((s) => s.plan)?.plan ?? null,
-    official: withGauge[0]?.official ?? null,
-    days,
-    byModel,
-    breakdown: mergeBreakdowns(seats.map((s) => s.breakdown).filter((b): b is Breakdown => Boolean(b))),
-    lastActivity: last,
-    machines: seats.map((s) => ({
-      id: s.id,
-      label: s.label,
-      source: s.source,
-      capturedAt: s.capturedAt,
-      lastActivity: s.lastActivity,
-      stale: s.source === 'push' && now.getTime() - new Date(s.capturedAt).getTime() > STALE_PUSH_MS,
-    })),
-    ...(plans.size > 1 ? { planConflict: [...plans.entries()].map(([p, who]) => `${p} (${who})`) } : {}),
-    note: seats.find((s) => s.note)?.note,
-  };
-}
-
-// ── plan names ──────────────────────────────────────────────────────────────
-
-const titleCase = (s: string) => s.replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-
-/** From ~/.claude.json oauthAccount: organizationType + organizationRateLimitTier. */
-export function claudePlanName(acc: { organizationType?: unknown; organizationRateLimitTier?: unknown } | undefined | null): string | null {
-  const type = typeof acc?.organizationType === 'string' ? acc.organizationType : '';
-  if (!type) return null;
-  const tier = typeof acc?.organizationRateLimitTier === 'string' ? acc.organizationRateLimitTier : '';
-  if (type === 'claude_max') {
-    const x = tier.match(/(\d+)x/)?.[1];
-    return x ? `Claude Max ${x}x` : 'Claude Max';
-  }
-  return `Claude ${titleCase(type.replace(/^claude_/, ''))}`;
-}
-
-const CHATGPT_PLANS: Record<string, string> = { plus: 'Plus', pro: 'Pro', prolite: 'Pro Lite', team: 'Team', business: 'Business', enterprise: 'Enterprise', edu: 'Edu', free: 'Free' };
-
-/** From Codex's rate_limits.plan_type. */
-export function codexPlanName(planType: string | undefined | null): string | null {
-  if (!planType) return null;
-  return `ChatGPT ${CHATGPT_PLANS[planType] ?? titleCase(planType)}`;
-}
-
-/** From the local Ollama server's POST /api/me `plan`. */
-export function ollamaPlanName(plan: string | undefined | null): string | null {
-  if (!plan) return null;
-  return `Ollama ${titleCase(plan)}`;
-}
-
-// ── ollama request counts ───────────────────────────────────────────────────
-
-export type RequestCounts = { chat: number; embed: number };
-const CHAT_PATHS = ['/api/chat', '/api/generate', '/v1/chat/completions', '/v1/completions', '/v1/responses'];
-const EMBED_PATHS = ['/api/embed', '/api/embeddings', '/v1/embeddings'];
-
-/** Ollama logs one [GIN] line per request, stamped in local time, with no
-    token counts. So the honest measure of how the plan burns locally is
-    requests: chat/generate vs embeddings, per window. */
-export function countOllamaRequests(lines: string[], now: Date): Record<UsageWindow, RequestCounts> {
-  const out = { hour: { chat: 0, embed: 0 }, session: { chat: 0, embed: 0 }, day: { chat: 0, embed: 0 }, week: { chat: 0, embed: 0 } };
-  const t = now.getTime();
-  const today = dayKey(now.toISOString());
-  for (const line of lines) {
-    const m = line.match(/^\[GIN\] (\d{4})\/(\d{2})\/(\d{2}) - (\d{2}):(\d{2}):(\d{2}) \|.*?"([^"?]+)/);
-    if (!m) continue;
-    const p = m[7];
-    const kind = CHAT_PATHS.includes(p) ? 'chat' : EMBED_PATHS.includes(p) ? 'embed' : null;
-    if (!kind) continue;
-    const when = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime();
-    const age = t - when;
-    if (age < 0 || age > USAGE_WINDOW_DAYS * 86400_000) continue;
-    out.week[kind]++;
-    if (dayKey(new Date(when).toISOString()) === today) out.day[kind]++;
-    if (age <= 5 * 3600_000) out.session[kind]++;
-    if (age <= 3600_000) out.hour[kind]++;
-  }
-  return out;
-}
-
-// ── the Ollama plan across machines ─────────────────────────────────────────
-
-const CountsSchema = z.object({ chat: z.number().min(0), embed: z.number().min(0) });
-export const OllamaLaneSchema = z.object({
-  state: z.enum(['up', 'down']),
-  plan: z.string().nullable(),
-  models: z.array(z.object({ name: z.string(), cloud: z.boolean() })),
-  requests: z.object({ hour: CountsSchema, session: CountsSchema, day: CountsSchema, week: CountsSchema }).nullable(),
-  note: z.string(),
-});
-export type OllamaLaneData = z.infer<typeof OllamaLaneSchema>;
-
-/** Another machine's Ollama reading: the plan is per ollama.com account, and
-    only the machine signed in can see it. */
-export const OllamaSnapshotSchema = z.object({
-  kind: z.literal('ollama'),
-  id: z.string().min(1),
-  label: z.string().min(1),
-  capturedAt: z.string().min(1),
-  lane: OllamaLaneSchema,
-});
-export type OllamaSnapshot = z.infer<typeof OllamaSnapshotSchema>;
-
-export type OllamaBoard = Omit<OllamaLaneData, 'models'> & {
-  models: { name: string; cloud: boolean; host: string }[];
-  machines: PlanMachine[];
-};
-
-/** This box's lane plus every pushed one: plan from whoever is signed in,
-    requests summed, models listed per machine. */
-export function combineOllama(local: { id: string; label: string; lane: OllamaLaneData } | null, pushed: OllamaSnapshot[], now: Date = new Date()): OllamaBoard {
-  const all = [
-    ...(local ? [{ id: local.id, label: local.label, capturedAt: now.toISOString(), lane: local.lane, source: 'local' as const }] : []),
-    ...pushed.map((p) => ({ id: p.id, label: p.label, capturedAt: p.capturedAt, lane: p.lane, source: 'push' as const })),
-  ];
-  const withLog = all.filter((a) => a.lane.requests);
-  const requests = withLog.length
-    ? (Object.fromEntries(WINDOWS.map((w) => [w, withLog.reduce((acc, a) => ({ chat: acc.chat + a.lane.requests![w].chat, embed: acc.embed + a.lane.requests![w].embed }), { chat: 0, embed: 0 })])) as Record<UsageWindow, RequestCounts>)
-    : null;
-  return {
-    state: all.some((a) => a.lane.state === 'up') ? 'up' : 'down',
-    plan: all.find((a) => a.lane.plan)?.lane.plan ?? null,
-    models: all.flatMap((a) => a.lane.models.map((m) => ({ ...m, host: a.label }))),
-    requests,
-    note: all[0]?.lane.note ?? '',
-    machines: all.map((a) => ({
-      id: a.id,
-      label: a.label,
-      source: a.source,
-      capturedAt: a.capturedAt,
-      lastActivity: null,
-      stale: a.source === 'push' && now.getTime() - new Date(a.capturedAt).getTime() > STALE_PUSH_MS,
-    })),
-  };
-}
-
-export type Verdict = { recommend: string | null; reason: string };
 
 /**
- * Which Claude seat should take the next heavy session. Official weekly
- * percentages win when both seats have them; otherwise local burn totals are
- * compared, clearly named as an estimate. One-sided data never produces a
- * recommendation -- a missing seat is a fact to surface, not a win by forfeit.
+ * The cached local reading. Fresh (< 60 s) returns at once; stale returns the
+ * last value and starts one refresh; only a cold process waits for a scan.
  */
-export function seatVerdict(seats: SeatUsage[], now: Date = new Date()): Verdict {
-  const claude = seats.filter((s) => s.kind === 'claude');
-  if (claude.length < 2) return { recommend: null, reason: 'only one Claude seat configured' };
-
-  const stale = claude.filter(
-    (s) => s.source === 'push' && now.getTime() - new Date(s.capturedAt).getTime() > STALE_PUSH_MS,
-  );
-  const live = claude.filter((s) => !stale.includes(s));
-  if (live.length < 2) {
-    const names = stale.map((s) => s.label).join(', ');
-    return { recommend: null, reason: `stale snapshot from ${names} — push a fresh reading before rotating` };
+export async function readLocalUsage(opts: { now?: Date; force?: boolean } = {}): Promise<LocalUsage> {
+  const now = opts.now ?? new Date();
+  const age = now.getTime() - cache.at;
+  const refresh = () => {
+    cache.pending ??= Promise.resolve()
+      .then(() => scanLocalUsage(now))
+      .then((v) => {
+        cache.value = v;
+        cache.at = Date.now();
+        return v;
+      })
+      .finally(() => {
+        cache.pending = null;
+      });
+    return cache.pending;
+  };
+  if (cache.value && !opts.force) {
+    if (age >= USAGE_REFRESH_MS) void refresh().catch(() => undefined);
+    return cache.value;
   }
-
-  const official = live.filter((s) => s.official?.weekly);
-  if (official.length === live.length) {
-    const best = [...official].sort((a, b) => a.official!.weekly!.usedPercent - b.official!.weekly!.usedPercent)[0];
-    return {
-      recommend: best.id,
-      reason: `lowest official weekly usage (${best.official!.weekly!.usedPercent.toFixed(0)}%)`,
-    };
-  }
-
-  const withData = live.filter((s) => totalBurn(s.days) > 0 || s.lastActivity);
-  if (withData.length < live.length) {
-    const missing = live.filter((s) => !withData.includes(s)).map((s) => s.label);
-    return { recommend: null, reason: `no data from ${missing.join(', ')}` };
-  }
-  const best = [...withData].sort((a, b) => totalBurn(a.days) - totalBurn(b.days))[0];
-  return { recommend: best.id, reason: `lowest 7-day local burn estimate (${fmtTokens(totalBurn(best.days))})` };
+  return refresh();
 }
 
-/** 1234567 → "1.2M" -- the board is a gauge, not an invoice. */
+// ── Ollama status (local, free) ────────────────────────────────────────────
+
+export type OllamaState = { state: 'up' | 'down'; models: string[]; error: string | null };
+
+export async function ollamaState(fetchFn: typeof fetch = fetch): Promise<OllamaState> {
+  const base = (process.env.OLLAMA_HOST || 'http://127.0.0.1:11434').replace(/\/$/, '');
+  try {
+    const res = await fetchFn(`${base}/api/ps`, { cache: 'no-store', signal: AbortSignal.timeout(800) });
+    if (!res.ok) return { state: 'down', models: [], error: `HTTP ${res.status}` };
+    const body = (await res.json()) as { models?: { name?: unknown }[] };
+    return { state: 'up', models: (body.models ?? []).map((m) => (typeof m.name === 'string' ? m.name : '')).filter(Boolean), error: null };
+  } catch (err) {
+    return { state: 'down', models: [], error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// ── the summary (pure) ─────────────────────────────────────────────────────
+
+export const PLAN_LABEL: Record<UsagePlan, string> = { claude: 'Claude', codex: 'ChatGPT / Codex', ollama: 'Ollama' };
+
+export type PlanSummary = {
+  plan: UsagePlan;
+  label: string;
+  /** false = no machine reported this plan in the window: render "Not reported", never 0 */
+  reported: boolean;
+  burn: number | null;
+  days: { day: string; burn: number }[] | null;
+  byModel: { model: string; burn: number }[];
+  machines: { machine: string; source: 'local' | 'push'; lastAt: string; stale: boolean; burn: number }[];
+  /** only a provider-reported gauge; null otherwise (no invented "% of limit") */
+  official: { session: OfficialWindow | null; weekly: OfficialWindow | null; at: string } | null;
+};
+
+export type UsageSummary = {
+  range: 7 | 30;
+  plans: PlanSummary[];
+  totalBurn: number;
+  topBurner: { machine: string; plan: UsagePlan; burn: number } | null;
+};
+
+export function summarizeUsage(input: {
+  readings: UsageReading[];
+  localMachine: string | null;
+  official: { codex: PlanSummary['official'] };
+  range: 7 | 30;
+  now: Date;
+}): UsageSummary {
+  const days: string[] = [];
+  for (let k = input.range - 1; k >= 0; k--) days.push(dayKey(input.now.getTime() - k * DAY));
+  const from = days[0];
+  const rows = input.readings.filter((r) => r.day >= from && r.day <= days[days.length - 1]);
+  const plans = (['claude', 'codex', 'ollama'] as UsagePlan[]).map((plan): PlanSummary => {
+    const mine = rows.filter((r) => r.plan === plan);
+    if (mine.length === 0) {
+      return { plan, label: PLAN_LABEL[plan], reported: false, burn: null, days: null, byModel: [], machines: [], official: plan === 'codex' ? input.official.codex : null };
+    }
+    const perDay = new Map(days.map((d) => [d, 0]));
+    const perModel = new Map<string, number>();
+    const perMachine = new Map<string, { lastAt: string; burn: number }>();
+    for (const r of mine) {
+      const b = burnOf(r);
+      perDay.set(r.day, (perDay.get(r.day) ?? 0) + b);
+      perModel.set(r.model, (perModel.get(r.model) ?? 0) + b);
+      const m = perMachine.get(r.machine) ?? { lastAt: r.pushedAt, burn: 0 };
+      perMachine.set(r.machine, { lastAt: r.pushedAt > m.lastAt ? r.pushedAt : m.lastAt, burn: m.burn + b });
+    }
+    const burn = [...perDay.values()].reduce((a, b) => a + b, 0);
+    return {
+      plan,
+      label: PLAN_LABEL[plan],
+      reported: true,
+      burn,
+      days: days.map((d) => ({ day: d, burn: perDay.get(d) ?? 0 })),
+      byModel: [...perModel.entries()].map(([model, b]) => ({ model, burn: b })).sort((a, b) => b.burn - a.burn),
+      machines: [...perMachine.entries()]
+        .map(([machine, m]) => {
+          const local = machine === input.localMachine;
+          return { machine, source: local ? ('local' as const) : ('push' as const), lastAt: m.lastAt, stale: !local && input.now.getTime() - Date.parse(m.lastAt) > STALE_PUSH_MS, burn: m.burn };
+        })
+        .sort((a, b) => b.burn - a.burn),
+      official: plan === 'codex' ? input.official.codex : null,
+    };
+  });
+  let top: UsageSummary['topBurner'] = null;
+  for (const p of plans) for (const m of p.machines) if (!top || m.burn > top.burn) top = { machine: m.machine, plan: p.plan, burn: m.burn };
+  return { range: input.range, plans, totalBurn: plans.reduce((a, p) => a + (p.burn ?? 0), 0), topBurner: top };
+}
+
+/** Burn per lane over the range, this machine only. null = no local source (lanes not reported). */
+export function summarizeLanes(input: { lanes: LaneReading[]; range: 7 | 30; now: Date; plan?: UsagePlan }): { lane: BurnLane; label: string; burn: number }[] {
+  const from = dayKey(input.now.getTime() - (input.range - 1) * DAY);
+  const to = dayKey(input.now);
+  const tot = new Map<BurnLane, number>(BURN_LANES.map((l) => [l, 0]));
+  for (const r of input.lanes) {
+    if (r.day < from || r.day > to || (input.plan && r.plan !== input.plan)) continue;
+    tot.set(r.lane, (tot.get(r.lane) ?? 0) + r.burn);
+  }
+  return BURN_LANES.map((lane) => ({ lane, label: LANE_LABEL[lane], burn: tot.get(lane) ?? 0 }));
+}

@@ -5,7 +5,7 @@ import { bestHook } from '@/lib/foreplay/mine';
 import { daysRunning } from '@/lib/foreplay/signals';
 
 /**
- * WallAd: the flat, serializable shape the AdPilot UI renders: everything a
+ * WallAd — the flat, serializable shape the AdPilot UI renders: everything a
  * card, the winners wall, and the dossier drawer need, precomputed once on
  * the server so the client never touches raw API objects.
  */
@@ -60,4 +60,17 @@ export function storeWall(limit = 60): WallAd[] {
   return out
     .sort((a, b) => Number(b.live) - Number(a.live) || b.daysRunning - a.daysRunning)
     .slice(0, limit);
+}
+
+/**
+ * One stored ad by id, for an `?ad=` deep link (SPEC G2, ACG2.3). The wall is
+ * capped and longevity-ranked, so a fresh launch a signal names can sit
+ * outside it; the link must still land on that ad.
+ */
+export function storeAdById(id: string): WallAd | null {
+  for (const brand of readWatchEntries()) {
+    const ad = adStore.readBrandAds(brand.id).find((a) => a.id === id);
+    if (ad) return toWallAd(ad, brand.name);
+  }
+  return null;
 }

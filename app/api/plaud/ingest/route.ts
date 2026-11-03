@@ -1,21 +1,24 @@
 import { NextResponse } from 'next/server';
 import { getDb } from '@/lib/data';
-import { ingestPlaudNow } from '@/lib/plaud-ingest';
+import { authorizePush } from '@/lib/push-auth';
+import { PlaudIngestSchema } from '@/lib/schemas';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
 /**
- * Plaud → knowledge base, on demand. GET lists what has been filed; POST runs
- * one ingest pass (the same pass the Sales Calls Data agent and its 30-minute
- * cron run). Pure code, no LLM: Plaud's transcript + AI note are filed as-is.
+ * Plaud recordings in (pages/feature-additions.md F4). A relay POSTs
+ *   { recordings: [{ externalId, title, startedAt, durationS?, participants?, summary?, transcriptUrl? }] }
+ * with `Authorization: Bearer <PLAUD_INGEST_TOKEN>` (or the operator session).
+ * Upserts on (plaud, externalId), so a replay never duplicates. Validated
+ * whole before any write.
  */
-export async function GET() {
-  const rows = getDb().plaudIngests.all();
-  return NextResponse.json({ ingested: rows.length, rows }, { headers: { 'Cache-Control': 'no-store' } });
-}
-
-export async function POST() {
-  const result = await ingestPlaudNow(getDb());
-  return NextResponse.json(result, { headers: { 'Cache-Control': 'no-store' } });
+export async function POST(req: Request) {
+  const auth = authorizePush(req, 'PLAUD_INGEST_TOKEN');
+  if (!auth.ok) return NextResponse.json({ error: auth.error }, { status: auth.status });
+  const parsed = PlaudIngestSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'invalid ingest', issues: parsed.error.flatten() }, { status: 400 });
+  const repo = getDb().callRecordings;
+  const ids = parsed.data.recordings.map((r) => repo.upsert({ ...r, source: 'plaud' }).id);
+  return NextResponse.json({ ok: true, stored: ids.length, ids });
 }

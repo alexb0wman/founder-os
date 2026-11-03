@@ -5,58 +5,42 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { runtimeEnv } from '@/lib/creds';
 
-export type KeySlot = {
-  envVar: string;
-  label: string;
-  group: string;
-  hint?: string;
-  /**
-   * The connector this slot feeds, when one exists.
-   *
-   * Mock 3f puts a "test" on every key row, and a test that does not actually
-   * reach the far end is worse than no test: it would report a rotated-but-dead
-   * key as fine. So a slot names the connector whose live check answers for it,
-   * and the row without one simply has nothing to press.
-   */
-  connectorId?: string;
-};
+export type KeySlot = { envVar: string; label: string; group: string; hint?: string };
 
 export const KEY_SLOTS: KeySlot[] = [
-  { envVar: 'INBOX_1_HOST', label: 'Inbox 1 host', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_1_USER', label: 'Inbox 1 user', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_1_PASS', label: 'Inbox 1 app password', group: 'Email', hint: 'Gmail app password', connectorId: 'email' },
-  { envVar: 'INBOX_2_HOST', label: 'Inbox 2 host', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_2_USER', label: 'Inbox 2 user', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_2_PASS', label: 'Inbox 2 app password', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_3_HOST', label: 'Inbox 3 host', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_3_USER', label: 'Inbox 3 user', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_3_PASS', label: 'Inbox 3 app password', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_4_HOST', label: 'Inbox 4 host', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_4_USER', label: 'Inbox 4 user', group: 'Email', connectorId: 'email' },
-  { envVar: 'INBOX_4_PASS', label: 'Inbox 4 app password', group: 'Email', connectorId: 'email' },
-  { envVar: 'SLACK_BOT_TOKEN', label: 'Slack bot token', group: 'Slack', hint: 'xoxb-… needs chat:write to reply from the OS', connectorId: 'slack' },
-  { envVar: 'STRIPE_SECRET_KEY', label: 'Stripe secret key', group: 'Payments', connectorId: 'payments' },
-  // A public Solana address, not a secret — it is a slot so the wallet can be
-  // changed on the host without a rebuild. Read-only: no signing key exists.
-  { envVar: 'NOTION_API_KEY', label: 'Notion integration secret', group: 'Knowledge', hint: 'internal integration; share Brand Deals Hub with it' },
-  { envVar: 'PHANTOM_WALLET_ADDRESS', label: 'Phantom wallet address (public)', group: 'Payments', hint: 'Solana address, read-only balance', connectorId: 'payments' },
-  { envVar: 'STRIPE_VANTAGE_KEY', label: 'Stripe · Vantage secret key', group: 'Payments', connectorId: 'payments' },
-  { envVar: 'PAYKIT_LC_KEY', label: 'PayKit · Launchpad Cohort API key', group: 'Payments', hint: 'x-api-key for /public-api; rotating it here beats a redeploy', connectorId: 'payments' },
-  { envVar: 'PAYKIT_VANTAGE_KEY', label: 'PayKit · Vantage API key', group: 'Payments', connectorId: 'payments' },
-  { envVar: 'PAYPAL_CLIENT_ID', label: 'PayPal client id', group: 'Payments', connectorId: 'payments' },
-  { envVar: 'PAYPAL_CLIENT_SECRET', label: 'PayPal client secret', group: 'Payments', connectorId: 'payments' },
-  { envVar: 'SQUARE_ACCESS_TOKEN', label: 'Square access token', group: 'Payments', connectorId: 'payments' },
-  { envVar: 'WHOP_API_KEY', label: 'Whop API key', group: 'Payments', connectorId: 'payments' },
-  { envVar: 'DOCUSIGN_INTEGRATION_KEY', label: 'DocuSign integration key', group: 'Contracts', hint: 'DocuSign admin → Apps & Keys', connectorId: 'docusign' },
-  { envVar: 'DOCUSIGN_USER_ID', label: 'DocuSign user ID', group: 'Contracts', hint: 'the API user GUID under Apps & Keys', connectorId: 'docusign' },
-  { envVar: 'DOCUSIGN_ACCOUNT_ID', label: 'DocuSign account ID', group: 'Contracts', connectorId: 'docusign' },
-  { envVar: 'DOCUSIGN_PRIVATE_KEY_B64', label: 'DocuSign RSA key (base64)', group: 'Contracts', hint: 'base64 -i private.key | pbcopy', connectorId: 'docusign' },
+  { envVar: 'INBOX_1_HOST', label: 'Inbox 1 host', group: 'Email' },
+  { envVar: 'INBOX_1_USER', label: 'Inbox 1 user', group: 'Email' },
+  { envVar: 'INBOX_1_PASS', label: 'Inbox 1 app password', group: 'Email', hint: 'Gmail app password' },
+  { envVar: 'INBOX_2_HOST', label: 'Inbox 2 host', group: 'Email' },
+  { envVar: 'INBOX_2_USER', label: 'Inbox 2 user', group: 'Email' },
+  { envVar: 'INBOX_2_PASS', label: 'Inbox 2 app password', group: 'Email' },
+  { envVar: 'INBOX_3_HOST', label: 'Inbox 3 host', group: 'Email' },
+  { envVar: 'INBOX_3_USER', label: 'Inbox 3 user', group: 'Email' },
+  { envVar: 'INBOX_3_PASS', label: 'Inbox 3 app password', group: 'Email' },
+  { envVar: 'INBOX_4_HOST', label: 'Inbox 4 host', group: 'Email' },
+  { envVar: 'INBOX_4_USER', label: 'Inbox 4 user', group: 'Email' },
+  { envVar: 'INBOX_4_PASS', label: 'Inbox 4 app password', group: 'Email' },
+  { envVar: 'SLACK_BOT_TOKEN', label: 'Slack bot token', group: 'Slack', hint: 'xoxb-… needs chat:write to reply from the OS' },
+  { envVar: 'STRIPE_SECRET_KEY', label: 'Stripe secret key', group: 'Payments' },
+  { envVar: 'PAYPAL_CLIENT_ID', label: 'PayPal client id', group: 'Payments' },
+  { envVar: 'PAYPAL_CLIENT_SECRET', label: 'PayPal client secret', group: 'Payments' },
+  { envVar: 'SQUARE_ACCESS_TOKEN', label: 'Square access token', group: 'Payments' },
+  { envVar: 'WHOP_API_KEY', label: 'Whop API key', group: 'Payments' },
   { envVar: 'NOTION_API_KEY', label: 'Notion integration secret', group: 'Notion' },
-  { envVar: 'MANYCHAT_API_KEY', label: 'ManyChat API key', group: 'Social', hint: 'ManyChat → Settings → API (Instagram DM automation)', connectorId: 'manychat' },
-  { envVar: 'HERMES_GATEWAY_URL', label: 'Hermes gateway URL', group: 'Agents', hint: 'the worker-pool gateway the stack check pings; defaults to a local loopback port on the host', connectorId: 'local-stack' },
-  { envVar: 'GBRAIN_STORE', label: 'Brain-store path override', group: 'G-Brain', connectorId: 'gbrain' },
-  { envVar: 'PLAUD_REFRESH_TOKEN', label: 'Plaud refresh token', group: 'Knowledge', hint: 'refresh_token from the Plaud MCP token file after `claude mcp` signs in; the OS mints its own access tokens', connectorId: 'plaud' },
+  { envVar: 'MANYCHAT_API_KEY', label: 'ManyChat API key', group: 'Social', hint: 'ManyChat → Settings → API (Instagram DM automation)' },
+  { envVar: 'GBRAIN_STORE', label: 'Brain-store path override', group: 'Optimal Engine' },
+  { envVar: 'ATTIO_API_KEY', label: 'Attio API key', group: 'CRM', hint: 'read-scoped — Attio writes stay manual by standing rule' },
+  { envVar: 'AI_GATEWAY_API_KEY', label: 'Vercel AI Gateway key', group: 'Orchestration' },
+  { envVar: 'GHL_API_KEY', label: 'GoHighLevel API key', group: 'CRM' },
+  { envVar: 'GHL_LOCATION_ID', label: 'GoHighLevel location id', group: 'CRM' },
+  { envVar: 'BEEHIIV_API_KEY', label: 'Beehiiv API key', group: 'Social' },
+  { envVar: 'BEEHIIV_PUBLICATION_ID', label: 'Beehiiv publication id', group: 'Social' },
+  { envVar: 'DEAL_ALERTS_BOT_TOKEN', label: 'Deal Alerts bot token', group: 'Telegram', hint: 'from BotFather, for the loud alerts bot' },
+  { envVar: 'FOREPLAY_API_KEY', label: 'Foreplay API key', group: 'Ads', hint: 'app.foreplay.co → settings → API; the ad library behind AdPilot and the Creative Engine' },
+  { envVar: 'MIOSA_API_KEY', label: 'MIOSA API key', group: 'Compute', hint: 'miosa auth token create --name glados; the cloud computers on the Compute page' },
+  { envVar: 'ARCADS_BASIC_AUTH', label: 'Arcads Basic auth', group: 'Ads', hint: 'app.arcads.ai → settings → API; paste the base64 or the full "Basic …" header value' },
 ];
 
 export function maskSecret(value: string): string {
@@ -67,7 +51,7 @@ export function maskSecret(value: string): string {
 
 export type KeyStatus = KeySlot & { present: boolean; masked: string };
 
-export function listKeyStatuses(env: Record<string, string | undefined> = process.env): KeyStatus[] {
+export function listKeyStatuses(env: Record<string, string | undefined> = runtimeEnv()): KeyStatus[] {
   return KEY_SLOTS.map((slot) => {
     const value = env[slot.envVar] ?? '';
     return { ...slot, present: value.length > 0, masked: maskSecret(value) };

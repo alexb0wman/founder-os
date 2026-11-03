@@ -1,6 +1,8 @@
-import type { FounderDb } from '@/lib/db';
+import type { GladosDb } from '@/lib/db';
 import { zernioAccounts } from '@/lib/connectors/zernio';
-import { growthOver, growthAllTime, windowDelta, mergeSeriesSum, type GrowthPoint } from '@/lib/growth';
+import { AGGREGATE_SERIES, SERIES_INDEX, type SeriesSlot } from '@/lib/series';
+import { growthOver, growthAllTime, mergeSeriesSum, type GrowthPoint } from '@/lib/growth';
+import { channelsNetChange, netChange, seriesWindow } from '@/lib/social-range';
 import {
   SocialDashboardSchema,
   SocialPlatformDetailSchema,
@@ -17,29 +19,29 @@ import {
 export const PLATFORM_LABELS: Record<SocialPlatform, string> = {
   instagram: 'Instagram',
   tiktok: 'TikTok',
-  twitter: 'X',
+  twitter: 'Twitter / X',
   youtube: 'YouTube',
   linkedin: 'LinkedIn',
 };
 
-// Brand-ish line colors for the pop-out charts (distinct, not theme-tied).
-export const PLATFORM_COLORS: Record<SocialPlatform, string> = {
-  instagram: '#e1306c',
-  tiktok: '#25f4ee',
-  twitter: '#f2f2f2', // X's mark on a dark ground is white, not Twitter blue
-  youtube: '#ff4d4d',
-  linkedin: '#0a85c2',
+// Series colours are not data: each channel carries its fixed series index
+// (lib/series.ts, SPEC C19) and the UI maps it to the --series-<n> token.
+export const PLATFORM_SERIES: Record<SocialPlatform, SeriesSlot> = {
+  instagram: SERIES_INDEX.instagram,
+  tiktok: SERIES_INDEX.tiktok,
+  twitter: SERIES_INDEX.twitter,
+  youtube: SERIES_INDEX.youtube,
+  linkedin: SERIES_INDEX.linkedin,
 };
-export const EMAIL_COLOR = '#8b7cff';
-export const ALL_AUDIENCE_COLOR = '#3df08c';
-export const DM_COLOR = '#5ec9f8';
 
 // The ranges every metric is sliced by (days, or 'all').
 export const GROWTH_RANGES = [7, 30, 60, 'all'] as const;
 export type GrowthRange = (typeof GROWTH_RANGES)[number];
 
 export type SeriesPoint = { date: string; value: number };
-export type LabelledSeries = { key: string; label: string; color: string; points: SeriesPoint[] };
+/** A labelled history line. `series` is the series index (0 = aggregate,
+    1..6 = channel per lib/series.ts), never a colour. */
+export type LabelledSeries = { key: string; label: string; series: number; points: SeriesPoint[] };
 
 const toSeriesPoints = (points: GrowthPoint[]): SeriesPoint[] =>
   points.map((p) => ({ date: p.capturedAt, value: p.value }));
@@ -73,12 +75,12 @@ function growthFor(snapshots: SocialSnapshot[]): SocialGrowth {
 
 /**
  * Record today's follower counts as snapshots. Accounts shaped like the Zernio
- * config (the optional local social config file); untracked platforms and accounts with
+ * config (~/.config/social/config.json); untracked platforms and accounts with
  * no follower count are skipped. Same-day re-sync overwrites. Returns the
  * number of snapshots recorded.
  */
 export function syncSocialSnapshots(
-  db: FounderDb,
+  db: GladosDb,
   accounts: Record<string, { handle?: string; followers?: number }>,
   today: string,
 ): number {
@@ -98,11 +100,11 @@ export function syncSocialSnapshots(
 }
 
 /** Live sync from the operator's Zernio config — called on every dashboard read. */
-export function syncFromZernioConfig(db: FounderDb, today?: string): number {
+export function syncFromZernioConfig(db: GladosDb, today?: string): number {
   return syncSocialSnapshots(db, zernioAccounts(), today ?? new Date().toISOString().slice(0, 10));
 }
 
-export function buildSocialDashboard(db: FounderDb): SocialDashboard {
+export function buildSocialDashboard(db: GladosDb): SocialDashboard {
   const latest = new Map(db.social.latest().map((s) => [s.platform, s]));
   const platforms = db.social.accounts().map((account) => {
     const snapshots = db.social.snapshots(account.platform);
@@ -124,52 +126,45 @@ export function buildSocialDashboard(db: FounderDb): SocialDashboard {
 }
 
 /** Per-platform DM counts, ordered to match the account list. */
-export function dmsByPlatform(db: FounderDb): SocialDm[] {
+export function dmsByPlatform(db: GladosDb): SocialDm[] {
   return db.social.dms();
 }
 
 /** Total DMs across every platform (seeded dummy until a real source lands). */
-export function totalDms(db: FounderDb): number {
+export function totalDms(db: GladosDb): number {
   return dmsByPlatform(db).reduce((sum, d) => sum + d.count, 0);
 }
 
 // ── Audience (followers + email) ──────────────────────────────────────────
 
 /** Each audience channel as a GrowthPoint series: one per platform + email. */
-function audienceChannelPoints(db: FounderDb): GrowthPoint[][] {
+function audienceChannelPoints(db: GladosDb): GrowthPoint[][] {
   return [
     ...db.social.accounts().map((a) => toPoints(db.social.snapshots(a.platform))),
     db.emailList.snapshots().map((s) => ({ capturedAt: s.capturedAt, value: s.subscribers })),
   ];
 }
 
-const allTimeDelta = (series: GrowthPoint[]): { current: number; baseline: number } | null =>
-  series.length < 2 || series[0].value === 0
-    ? null
-    : { current: series[series.length - 1].value, baseline: series[0].value };
-
-/**
- * Aggregate growth across the whole audience for a range. Each channel
- * contributes only if its history reaches back the full window; channels
- * without a baseline are excluded from both sides so they never distort the
- * figure. Null when no channel qualifies yet.
- */
-export function audienceGrowthPct(db: FounderDb, range: GrowthRange): number | null {
-  let current = 0;
-  let baseline = 0;
-  let qualified = 0;
-  for (const series of audienceChannelPoints(db)) {
-    const delta = range === 'all' ? allTimeDelta(series) : windowDelta(series, range);
-    if (!delta) continue;
-    current += delta.current;
-    baseline += delta.baseline;
-    qualified += 1;
-  }
-  if (qualified === 0 || baseline === 0) return null;
-  return ((current - baseline) / baseline) * 100;
+/** The summed audience line (every channel + email, carried forward). */
+function audienceAllPoints(db: GladosDb): SeriesPoint[] {
+  return toSeriesPoints(mergeSeriesSum(audienceChannelPoints(db)));
 }
 
-export function audienceGrowth(db: FounderDb): SocialGrowth {
+/**
+ * Aggregate growth across the whole audience for a range, through the one
+ * range helper (lib/social-range.ts `channelsNetChange`) that also prints
+ * "+N net" on the combined-audience chart, so the tile and the chart always
+ * agree (H18). Channels without a baseline at the window start are left out
+ * of both sides so a newly connected channel never reads as growth. Null
+ * when no channel qualifies yet.
+ */
+export function audienceGrowthPct(db: GladosDb, range: GrowthRange): number | null {
+  const channels = audienceChannelPoints(db).map(toSeriesPoints);
+  const today = new Date().toISOString().slice(0, 10);
+  return channelsNetChange(channels, range, today)?.pct ?? null;
+}
+
+export function audienceGrowth(db: GladosDb): SocialGrowth {
   return {
     d7: audienceGrowthPct(db, 7),
     d30: audienceGrowthPct(db, 30),
@@ -179,28 +174,28 @@ export function audienceGrowth(db: FounderDb): SocialGrowth {
 }
 
 /** Back-compat alias — the old name for the 30-day audience figure. */
-export function monthlyAudienceGrowthPct(db: FounderDb): number | null {
+export function monthlyAudienceGrowthPct(db: GladosDb): number | null {
   return audienceGrowthPct(db, 30);
 }
 
 /** Current total audience = sum of each channel's latest value. */
-export function audienceTotal(db: FounderDb): number {
+export function audienceTotal(db: GladosDb): number {
   return audienceChannelPoints(db).reduce((sum, s) => sum + (s.at(-1)?.value ?? 0), 0);
 }
 
 /** Per-channel + "All audience" series for the pop-out chart (carry-forward). */
-export function audienceSeries(db: FounderDb): { channels: LabelledSeries[]; all: LabelledSeries } {
+export function audienceSeries(db: GladosDb): { channels: LabelledSeries[]; all: LabelledSeries } {
   const channels: LabelledSeries[] = [
     ...db.social.accounts().map((a) => ({
       key: a.platform,
       label: PLATFORM_LABELS[a.platform],
-      color: PLATFORM_COLORS[a.platform],
+      series: PLATFORM_SERIES[a.platform],
       points: toSeriesPoints(toPoints(db.social.snapshots(a.platform))),
     })),
     {
       key: 'email',
       label: 'Email List',
-      color: EMAIL_COLOR,
+      series: SERIES_INDEX.email,
       points: db.emailList.snapshots().map((s) => ({ date: s.capturedAt, value: s.subscribers })),
     },
   ].filter((c) => c.points.length > 0);
@@ -208,8 +203,8 @@ export function audienceSeries(db: FounderDb): { channels: LabelledSeries[]; all
   const all: LabelledSeries = {
     key: 'all',
     label: 'All audience',
-    color: ALL_AUDIENCE_COLOR,
-    points: toSeriesPoints(mergeSeriesSum(audienceChannelPoints(db))),
+    series: AGGREGATE_SERIES,
+    points: audienceAllPoints(db),
   };
   return { channels, all };
 }
@@ -217,7 +212,7 @@ export function audienceSeries(db: FounderDb): { channels: LabelledSeries[]; all
 // ── DMs ───────────────────────────────────────────────────────────────────
 
 /** Total DMs per day across platforms (carry-forward sum of DM snapshots). */
-export function dmSeries(db: FounderDb): SeriesPoint[] {
+export function dmSeries(db: GladosDb): SeriesPoint[] {
   const byPlatform = new Map<string, GrowthPoint[]>();
   for (const s of db.social.dmSnapshots()) {
     const list = byPlatform.get(s.platform) ?? [];
@@ -227,9 +222,10 @@ export function dmSeries(db: FounderDb): SeriesPoint[] {
   return toSeriesPoints(mergeSeriesSum([...byPlatform.values()]));
 }
 
-export function dmGrowthPct(db: FounderDb, range: GrowthRange): number | null {
-  const series = dmSeries(db).map((p) => ({ capturedAt: p.date, value: p.value }));
-  return range === 'all' ? growthAllTime(series) : growthOver(series, range);
+export function dmGrowthPct(db: GladosDb, range: GrowthRange): number | null {
+  const series = dmSeries(db);
+  const today = new Date().toISOString().slice(0, 10);
+  return netChange(series, seriesWindow(range, series, today))?.pct ?? null;
 }
 
 // ── Posting cadence ───────────────────────────────────────────────────────
@@ -295,7 +291,7 @@ export function postingCadenceByPlatform(endDate: string, days = 90): PostingByP
 export type PostingSeries = {
   key: SocialPlatform;
   label: string;
-  color: string;
+  series: number;
   points: { date: string; count: number }[];
   total: number;
 };
@@ -309,14 +305,14 @@ export function postingSeries(endDate: string, days = 90): PostingSeries[] {
     return {
       key,
       label: PLATFORM_LABELS[key],
-      color: PLATFORM_COLORS[key],
+      series: PLATFORM_SERIES[key],
       points,
       total: points.reduce((sum, p) => sum + p.count, 0),
     };
   });
 }
 
-export function dmGrowth(db: FounderDb): SocialGrowth {
+export function dmGrowth(db: GladosDb): SocialGrowth {
   return {
     d7: dmGrowthPct(db, 7),
     d30: dmGrowthPct(db, 30),
@@ -325,7 +321,7 @@ export function dmGrowth(db: FounderDb): SocialGrowth {
   };
 }
 
-export function platformDetail(db: FounderDb, platform: SocialPlatform): SocialPlatformDetail | null {
+export function platformDetail(db: GladosDb, platform: SocialPlatform): SocialPlatformDetail | null {
   if (!SocialPlatformSchema.safeParse(platform).success) return null;
   const account = db.social.accounts().find((a) => a.platform === platform);
   if (!account) return null;
@@ -354,7 +350,7 @@ export type DmThread = {
 /** Group the DM messages for a platform into conversations, newest thread
     first. `unreplied` is true when the last message is inbound (needs a reply).
     Seeded until the ManyChat webhook feeds `social_dm_messages` live. */
-export function dmThreads(db: FounderDb, platform: SocialPlatform = 'instagram'): DmThread[] {
+export function dmThreads(db: GladosDb, platform: SocialPlatform = 'instagram'): DmThread[] {
   const groups = new Map<string, SocialDmMessage[]>();
   for (const m of db.social.dmMessages(platform)) {
     // dmMessages is newest-first; collect per subscriber.

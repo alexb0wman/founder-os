@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { seedDatabase } from '@/lib/seed';
 import {
   attentionQueue,
@@ -11,7 +9,6 @@ import {
   splitFunnelJourneys,
   decayFactor,
   DECAY_FADE_START,
-  STALL_DAYS,
   DECAY_DAYS,
   FUNNEL_STAGES,
 } from '@/lib/funnel';
@@ -24,7 +21,7 @@ import {
   type FunnelTouch,
 } from '@/lib/schemas';
 
-let db: FounderDb;
+let db: GladosDb;
 
 afterEach(() => {
   db?.close();
@@ -33,7 +30,7 @@ afterEach(() => {
 const contact = (over: Partial<FunnelContact> = {}): FunnelContact => ({
   id: 'fc-test',
   name: 'Test Client',
-  venture: 'vantage',
+  venture: 'venture-a',
   status: 'engaged',
   product: null,
   amountUsd: null,
@@ -99,79 +96,19 @@ describe('funnel repo', () => {
 
   test('venture filter narrows journeys', () => {
     db = openDb(':memory:');
-    db.funnel.insertContact(contact({ id: 'fc-m', venture: 'vantage' }));
-    db.funnel.insertContact(contact({ id: 'fc-aa', venture: 'launchpad-cohort' }));
-    expect(db.funnel.journeys('vantage').map((j) => j.id)).toEqual(['fc-m']);
-    expect(db.funnel.journeys('launchpad-cohort').map((j) => j.id)).toEqual(['fc-aa']);
+    db.funnel.insertContact(contact({ id: 'fc-m', venture: 'venture-a' }));
+    db.funnel.insertContact(contact({ id: 'fc-aa', venture: 'venture-b' }));
+    expect(db.funnel.journeys('venture-a').map((j) => j.id)).toEqual(['fc-m']);
+    expect(db.funnel.journeys('venture-b').map((j) => j.id)).toEqual(['fc-aa']);
     expect(db.funnel.journeys()).toHaveLength(2);
   });
 });
 
 describe('funnel seed', () => {
-  test('seeds 4–5 touch journeys for both ventures, converted rows carry product + amount', () => {
+  test('a fresh install ships no funnel contacts or touches', () => {
     db = openDb(':memory:');
     seedDatabase(db);
-    const all = db.funnel.journeys();
-    expect(all.length).toBeGreaterThanOrEqual(10);
-
-    for (const j of all) {
-      FunnelJourneySchema.parse(j);
-      expect(j.touches.length).toBeGreaterThanOrEqual(4);
-      expect(j.touches.length).toBeLessThanOrEqual(5);
-      // touches are a contiguous 1..n sequence in chronological order
-      expect(j.touches.map((t) => t.seq)).toEqual(j.touches.map((_, i) => i + 1));
-      expect(j.touches[0].stage).toBe('first_touch');
-    }
-
-    // both ventures represented
-    expect(new Set(all.map((j) => j.venture))).toEqual(new Set(['vantage', 'launchpad-cohort']));
-
-    // both acquisition lanes represented, with honest intended sources
-    const firsts = all.map((j) => j.touches[0]);
-    expect(firsts.some((t) => t.channel === 'organic' && t.source === 'trakyo')).toBe(true);
-    expect(firsts.some((t) => t.channel === 'ads' && t.source === 'meta-ads')).toBe(true);
-
-    // converted journeys end on a converted touch and carry the offer + amount
-    const converted = all.filter((j) => j.status === 'converted');
-    expect(converted.length).toBeGreaterThanOrEqual(4);
-    for (const j of converted) {
-      expect(j.touches.at(-1)?.stage).toBe('converted');
-      expect(j.product).toBeTruthy();
-      expect(j.amountUsd ?? 0).toBeGreaterThan(0);
-    }
-
-    // some journeys are honestly mid-funnel (not everyone converts)
-    expect(all.some((j) => j.status !== 'converted')).toBe(true);
-
-    // one seeded lead has decayed past 90 quiet days so the archive tab demos
-    const split = splitFunnelJourneys(all, new Date());
-    expect(split.archived.length).toBeGreaterThanOrEqual(1);
-    expect(split.active.length).toBeGreaterThanOrEqual(10);
-
-    // and one active lead sits mid-fade so the decay rendering always demos
-    const decays = funnelSpaceModel(split.active, new Date()).map((n) => n.decay);
-    expect(decays.some((d) => d > 0.3 && d < 1)).toBe(true);
-
-    // relationship + likelihood seeded for every client
-    for (const j of all) {
-      expect(['cold', 'warm', 'hot']).toContain(j.relationship);
-      expect(j.likelihood).toBeGreaterThanOrEqual(0);
-      expect(j.likelihood).toBeLessThanOrEqual(100);
-    }
-
-    // touch dates are relative to today, so stall states stay meaningful:
-    // at least one non-converted lead is stalled (>7d quiet) and one is active
-    const now = new Date();
-    const metas = all.filter((j) => j.status !== 'converted').map((j) => journeyMeta(j, now));
-    expect(metas.some((m) => m.state === 'stalled')).toBe(true);
-    expect(metas.some((m) => m.state === 'active')).toBe(true);
-    // and the freshest touch is genuinely recent (not a fixed 2026-06 date)
-    const freshest = Math.min(...metas.map((m) => m.daysSinceLastTouch));
-    expect(freshest).toBeLessThanOrEqual(3);
-
-    // re-seeding is idempotent
-    seedDatabase(db);
-    expect(db.funnel.journeys()).toHaveLength(all.length);
+    expect(db.funnel.journeys()).toEqual([]);
   });
 });
 
@@ -184,7 +121,7 @@ describe('funnelSummary', () => {
   ): FunnelJourney => ({
     id,
     name: id,
-    venture: 'vantage',
+    venture: 'venture-a',
     status,
     product: amountUsd ? 'Offer' : null,
     amountUsd,
@@ -256,7 +193,7 @@ describe('journeyMeta', () => {
   ): FunnelJourney => ({
     id: 'jm',
     name: 'jm',
-    venture: 'vantage',
+    venture: 'venture-a',
     status,
     product: null,
     amountUsd: null,
@@ -364,7 +301,7 @@ describe('funnelSpaceModel', () => {
   ): FunnelJourney => ({
     id,
     name: id,
-    venture: 'launchpad-cohort',
+    venture: 'venture-b',
     status,
     product: null,
     amountUsd: null,
@@ -412,18 +349,18 @@ describe('funnelSpaceModel', () => {
 
   test('identity fields ride onto the node for the dossier (AC52/AC54)', () => {
     const j = mkJourney('who', 'engaged', [mkTouch('who', 1, 'first_touch', 1)], {
-      person: 'Riley Monroe',
-      company: 'monroe Holdings LLC',
+      person: 'Reese Calder',
+      company: 'Calder Holdings LLC',
       role: 'C-level',
-      linkedin: 'https://linkedin.com/in/riley-monroe-example',
-      email: 'riley@acmeholdings.example.com',
-      phone: '+15550100311',
+      linkedin: 'https://linkedin.com/in/reesecalder-example',
+      email: 'reese@example.com',
+      phone: '+15550100442',
     });
     const [node] = funnelSpaceModel([j], NOW);
-    expect(node.person).toBe('Riley Monroe');
-    expect(node.company).toBe('monroe Holdings LLC');
+    expect(node.person).toBe('Reese Calder');
+    expect(node.company).toBe('Calder Holdings LLC');
     expect(node.role).toBe('C-level');
-    expect(node.linkedin).toBe('https://linkedin.com/in/riley-monroe-example');
+    expect(node.linkedin).toBe('https://linkedin.com/in/reesecalder-example');
   });
 
   test('node radius grows with likelihood-to-buy inside compact 2.5–5.5px bounds', () => {
@@ -459,7 +396,7 @@ describe('attentionQueue — what to act on today (AC55)', () => {
   ): FunnelJourney => ({
     id,
     name: id,
-    venture: 'vantage',
+    venture: 'venture-a',
     status: 'engaged',
     product: null,
     amountUsd: null,
@@ -523,37 +460,6 @@ describe('attentionQueue — what to act on today (AC55)', () => {
     expect(q.saveNow.map((j) => j.id)).toEqual(['fading-inbound']);
   });
 
-  /**
-   * The band between the rails (found in FounderOS-DEMO #3, 2026-08-06).
-   * A lead quiet past STALL_DAYS (7) runs red on the board, but the fade
-   * does not begin until DECAY_FADE_START (21). saveNow used to test only
-   * "is it fading", so days 8-21 landed in neither rail: flagged as a
-   * problem on the board, absent from the list of what to do about it.
-   * Three real seeded leads sat in that hole.
-   */
-  test('a stalled lead that is not fading yet is still a save, not silence', () => {
-    const q = attentionQueue([lead('late-not-fading', { likelihood: 60 }, 15)], NOW);
-    expect(q.saveNow.map((j) => j.id)).toEqual(['late-not-fading']);
-    expect(q.pushNow).toEqual([]);
-  });
-
-  test('every day of the stalled-but-not-fading band surfaces', () => {
-    for (let days = STALL_DAYS + 1; days <= DECAY_FADE_START; days++) {
-      const q = attentionQueue([lead(`quiet-${days}`, { likelihood: 60 }, days)], NOW);
-      expect(q.saveNow.length, `${days}d quiet should be rescuable`).toBe(1);
-      expect(q.pushNow.length, `${days}d quiet is not a push`).toBe(0);
-    }
-  });
-
-  test('the rails stay mutually exclusive after the widening', () => {
-    for (const status of ['engaged', 'first_touch'] as const) {
-      for (let days = 0; days <= 120; days++) {
-        const q = attentionQueue([lead(`x-${status}-${days}`, { likelihood: 90, status }, days)], NOW);
-        expect(q.pushNow.length + q.saveNow.length, `${status} at ${days}d`).toBeLessThanOrEqual(1);
-      }
-    }
-  });
-
   test('empty pipeline yields empty queues', () => {
     expect(attentionQueue([], NOW)).toEqual({ pushNow: [], saveNow: [] });
   });
@@ -571,33 +477,5 @@ describe('orbitSpread — crowded hubs breathe wider', () => {
     expect(orbitSpread(1000)).toBe(2.4);
     // safe on empty clusters
     expect(orbitSpread(0)).toBe(1);
-  });
-});
-
-/**
- * Mock 3c polish (the operator, 2026-09-07): the view controls are the same chip
- * vocabulary as the venture tabs — a Flow/Radial toggle plus an Archive (n)
- * chip — instead of bare text links, and every visible string drops the em
- * dash for the middot.
- */
-describe('/funnel mock-3c polish', () => {
-  const page = readFileSync(join(process.cwd(), 'app/funnel/page.tsx'), 'utf8');
-
-  test('Flow / Radial is a chip toggle, Archive is a chip with its count', () => {
-    expect(page).toContain("label: 'Flow'");
-    expect(page).toContain("label: 'Radial'");
-    expect(page).toMatch(/Archive \(\{archived\.length\}\)/);
-    // chips, not text links: the archive control carries the chip frame
-    expect(page).toMatch(/rounded-ctl border[\s\S]{0,600}Archive \(/);
-    // the standalone "live funnel" text link is retired
-    expect(page).not.toContain('live funnel');
-  });
-
-  test('visible copy carries no em dashes', () => {
-    expect(page).toContain('hot + moving · close them');
-    expect(page).toContain('fading toward the archive · highest likelihood first');
-    expect(page).not.toMatch(/decayed — no lead/);
-    expect(page).not.toMatch(/fading — every lead/);
-    expect(page).not.toMatch(/unavailable — last messages/);
   });
 });

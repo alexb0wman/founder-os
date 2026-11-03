@@ -1,18 +1,19 @@
 import type { BlueprintGraph, BlueprintNode, BlueprintEdge } from './graph';
+import { BRAND } from '@/lib/brand';
 
 /**
- * Blueprint hierarchy: the compiled graph re-read as buckets: containers
+ * Blueprint hierarchy — the compiled graph re-read as buckets: containers
  * (the operator, the running OS, each machine, the cloud) → groups
  * (departments, capabilities, daemons, models) → things. Pure and
  * client-safe: everything here derives from lib/blueprint/compile.ts's
  * graph, so the map still cannot drift from the system. The concept this
- * ports (the blueprint concept) read a hand-written
+ * ports (glados-blueprint-concept/hierarchy, 2026-09-15) read a hand-written
  * audit; the OS reads itself.
  */
 
 export type HKind =
   | 'operator'
-  | 'command' // the engine the Conductor runs on
+  | 'command' // the engine the Wizard runs on
   | 'app' // the running OS
   | 'router'
   | 'agent'
@@ -101,7 +102,7 @@ export interface Hierarchy {
 
 export const ROUTER_DEPARTMENTS = 'router-departments';
 export const ENGINE_ID = 'model-claude-engine';
-export const APP_ID = 'k-founder';
+export const APP_ID = 'k-glados';
 export const CLOUD_ID = 'k-cloud';
 
 export const KIND_LABEL: Record<HKind, string> = {
@@ -172,7 +173,7 @@ function group(id: string, name: string, sub: string, kind: HKind, icon: string,
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** Agents' facts carry role/model/tools: the one-line sub says the role. */
+/** Agents' facts carry role/model/tools — the one-line sub says the role. */
 function agentSub(n: BlueprintNode): string {
   const role = n.facts.role;
   if (n.status === 'designed') return role ? `${role} · designed, not wired` : 'designed, not wired';
@@ -245,7 +246,7 @@ export function buildHierarchy(graph: BlueprintGraph): Hierarchy {
   const appRows: HItem[][] = [];
   if (wizardNode) {
     const row: HItem[] = [node(wizardNode, 'app', 'hero', wizardNode.blurb)];
-    if (engineNode) row.push({ ...node(engineNode, 'command', 'hero', engineNode.blurb), satellite: true });
+    if (engineNode) row.push({ ...node(engineNode, 'command', 'hero', engineNode.status === 'live' ? `local claude binary${engineNode.facts.mode ? ` · ${engineNode.facts.mode}` : ''}` : engineNode.blurb), satellite: true });
     appRows.push(row);
   }
   const routerDepartments: HNode | null = deptGroups.length
@@ -254,14 +255,14 @@ export function buildHierarchy(graph: BlueprintGraph): Hierarchy {
   if (routerDepartments) appRows.push([routerDepartments]);
   if (deptGroups.length) appRows.push(deptGroups);
   if (capability.length) appRows.push(capability);
-  if (routers.length) appRows.push(routers.map((r) => node(r, 'router', 'diamond', r.blurb.split(': ')[1] ?? r.blurb)));
+  if (routers.length) appRows.push(routers.map((r) => node(r, 'router', 'diamond', r.blurb.split(' — ')[1] ?? r.blurb)));
   if (appRows.length) {
     containers.push({
       type: 'container',
       id: APP_ID,
       kind: 'app',
-      name: 'Founder OS',
-      sub: 'the running OS · the Conductor commands agents · agents belong to departments · agents use tools',
+      name: BRAND.name,
+      sub: 'the running OS · the Wizard commands agents · agents belong to departments · agents use tools',
       icon: 'layout-dashboard',
       rows: appRows,
       facts: { agents: String(agents.length), departments: String(departments.length), pages: String(surfaces.length) },
@@ -297,7 +298,7 @@ export function buildHierarchy(graph: BlueprintGraph): Hierarchy {
     });
   }
 
-  // ── Structural edges (always drawn): each one exists in the graph ──
+  // ── Structural edges (always drawn) — each one exists in the graph ──
   const has = (from: string, to: string, kind?: BlueprintEdge['kind']) => graph.edges.some((e) => e.from === from && e.to === to && (!kind || e.kind === kind));
   if (operator && wizardNode && has(operator.id, wizardNode.id, 'commands')) spine.push({ from: operator.id, to: wizardNode.id, kind: 'hot', label: 'commands' });
   if (wizardNode && engineNode && has(wizardNode.id, engineNode.id, 'runs-on')) spine.push({ from: wizardNode.id, to: engineNode.id, kind: 'soft', label: 'runs on' });

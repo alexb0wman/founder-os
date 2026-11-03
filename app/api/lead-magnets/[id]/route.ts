@@ -1,46 +1,22 @@
 import { NextResponse } from 'next/server';
-import { z } from 'zod';
 import { getDb } from '@/lib/data';
-import { LeadMagnetStatusSchema } from '@/lib/schemas';
+import { LeadMagnetPatchSchema } from '@/lib/schemas';
 
 export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
 
-/**
- * One lead magnet. PATCH edits it (retire a page, fix a typo, repoint a URL
- * after a custom domain lands); DELETE drops it. Both 404 honestly when the id
- * is not there rather than reporting a success that did nothing.
- */
-const PatchSchema = z
-  .object({
-    name: z.string().min(1).max(120),
-    url: z.string().url(),
-    offer: z.string().max(400),
-    status: LeadMagnetStatusSchema,
-    captures: z.enum(['email', 'booking', 'none']),
-    destination: z.string().max(200),
-    source: z.string().max(300),
-    launchedAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'launchedAt must be YYYY-MM-DD'),
-    notes: z.string().max(2000),
-  })
-  .partial();
-
+/** Edit a lead magnet (status change inline, or the edit form). Validated whole. */
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const parsed = PatchSchema.safeParse(await req.json().catch(() => null));
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-
-  const db = getDb();
-  const existing = db.leadMagnets.byId(params.id);
-  if (!existing) return NextResponse.json({ error: 'lead magnet not found' }, { status: 404 });
-
-  // id and origin are not editable: the id is referenced by whatever links to
-  // it, and origin is what protects an OS-made row from the seed.
-  const updated = { ...existing, ...parsed.data, id: existing.id, origin: existing.origin };
-  db.leadMagnets.insert(updated);
-  return NextResponse.json({ leadMagnet: updated });
+  const parsed = LeadMagnetPatchSchema.safeParse(await req.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: 'invalid change', issues: parsed.error.flatten() }, { status: 400 });
+  if (Object.keys(parsed.data).length === 0) return NextResponse.json({ error: 'nothing to change' }, { status: 400 });
+  const magnet = getDb().leadMagnets.update(params.id, parsed.data);
+  if (!magnet) return NextResponse.json({ error: 'unknown lead magnet' }, { status: 404 });
+  return NextResponse.json({ ok: true, magnet });
 }
 
+/** Delete the record only, never the page it points at (LM-2; the UI confirms first). */
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const removed = getDb().leadMagnets.remove(params.id);
-  if (!removed) return NextResponse.json({ error: 'lead magnet not found' }, { status: 404 });
+  if (!getDb().leadMagnets.remove(params.id)) return NextResponse.json({ error: 'unknown lead magnet' }, { status: 404 });
   return NextResponse.json({ ok: true, id: params.id });
 }

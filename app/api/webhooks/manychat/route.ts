@@ -11,12 +11,21 @@ export const dynamic = 'force-dynamic';
  * carrying the contact + message. Each message upserts by id, so replays don't
  * duplicate.
  *
- * If MANYCHAT_WEBHOOK_SECRET is set, the request must carry a matching
- * `x-manychat-secret` header (add it in the ManyChat External Request headers).
+ * This route is the ONE endpoint the auth middleware lets through (ManyChat
+ * cannot hold a session cookie), so it carries its own shared secret and
+ * FAILS CLOSED: with MANYCHAT_WEBHOOK_SECRET unset it refuses every request
+ * rather than accepting anonymous writes (audit fix, 2026-08-24 — it used to
+ * skip the check entirely when the secret was missing).
  */
 export async function POST(request: Request): Promise<Response> {
   const secret = process.env.MANYCHAT_WEBHOOK_SECRET;
-  if (secret && request.headers.get('x-manychat-secret') !== secret) {
+  if (!secret) {
+    return NextResponse.json(
+      { error: 'webhook disabled: MANYCHAT_WEBHOOK_SECRET is not set on this host' },
+      { status: 503 },
+    );
+  }
+  if (request.headers.get('x-manychat-secret') !== secret) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 

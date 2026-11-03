@@ -9,7 +9,7 @@ import {
 } from '@/lib/pillar-radar';
 
 /**
- * The pillar spider chart (FounderOS-style): one axis per department over a
+ * The pillar spider chart (GladOS-style): one axis per department over a
  * three-level hex grid, with the overall-health polygon plus the three signals
  * it's built from (roster active / run recency / SOP coverage) as their own
  * layers. The layers pile up, so hovering the chart SIFTS between them: the
@@ -17,17 +17,10 @@ import {
  * while the rest fade back. Hover a legend chip to lock onto a layer directly.
  */
 
-const S = 520; // vertical extent (the chart is centered at C on both axes)
+const S = 520; // viewBox square
 const C = S / 2;
 const R = 172; // outer grid radius
-const LABEL_R = R + 36; // rim labels sit just outside the grid
-// The long side labels (COMMUNICATIONS, FINANCES, CLIENTS) run wider than the
-// grid, so the viewBox gets horizontal breathing room on each side. The chart
-// stays centered at C; the hover math below reads this same padded box so the
-// layer-sifting still tracks the cursor.
-const PAD_X = 76;
-const VB_MIN_X = -PAD_X;
-const VB_W = S + PAD_X * 2;
+const LABEL_R = R + 44;
 
 type Layer = { key: PillarLayerKey; label: string; color: string; dash?: string; fill?: boolean };
 const LAYERS: Layer[] = [
@@ -58,7 +51,7 @@ export function PillarRadar({
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
     if (rect.width === 0) return;
-    const x = VB_MIN_X + ((e.clientX - rect.left) / rect.width) * VB_W;
+    const x = ((e.clientX - rect.left) / rect.width) * S;
     const y = ((e.clientY - rect.top) / rect.height) * S;
     setActive(nearestPillarLayer({ x, y }, axes, R, C));
   };
@@ -73,10 +66,10 @@ export function PillarRadar({
       <div className="grid flex-1 place-items-center">
         <svg
           ref={svgRef}
-          viewBox={`${VB_MIN_X} 0 ${VB_W} ${S}`}
-          className="block w-full max-w-[560px]"
+          viewBox={`0 0 ${S} ${S}`}
+          className="block w-full max-w-[500px]"
           role="img"
-          aria-label="Pillar health radar · hover to sift between layers"
+          aria-label="Pillar health radar — hover to sift between layers"
           onMouseMove={onMove}
           onMouseLeave={() => setActive(null)}
         >
@@ -114,7 +107,7 @@ export function PillarRadar({
                     const [x, y] = radarPoint(i, n, (Math.max(5, a[layer.key]) / 100) * R, C);
                     const out = radarPoint(i, n, (Math.max(5, a[layer.key]) / 100) * R + 15, C);
                     return (
-                      <text key={a.id} x={out[0]} y={out[1]} textAnchor="middle" dominantBaseline="middle" fontFamily="var(--font-mono)" fontSize={12} fontWeight={700} fill={layer.color}>
+                      <text key={a.id} x={out[0]} y={out[1]} textAnchor="middle" dominantBaseline="middle" fontFamily="var(--font-mono)" fontSize={12} fontWeight={500} fill={layer.color}>
                         {a[layer.key]}
                       </text>
                     );
@@ -128,8 +121,8 @@ export function PillarRadar({
             const [x, y] = radarPoint(i, n, LABEL_R, C);
             const anchor = Math.abs(x - C) < 8 ? 'middle' : x > C ? 'start' : 'end';
             return (
-              <text key={a.id} x={x} y={y} textAnchor={anchor} dominantBaseline="middle" fontFamily="var(--font-mono)" fontSize={13} letterSpacing="0.14em" fill="var(--text-2)">
-                {a.label.toUpperCase().replace('/GROWTH', '')}
+              <text key={a.id} x={x} y={y} textAnchor={anchor} dominantBaseline="middle" fontFamily="var(--font-sans)" fontSize={14} fill="var(--text-2)">
+                {a.label.replace('/Growth', '').replace('/growth', '').replace('Communications', 'Comms')}
               </text>
             );
           })}
@@ -137,43 +130,41 @@ export function PillarRadar({
       </div>
 
       {/* legend — hover a chip to lock the layer; the active one lifts */}
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 px-4 font-mono text-[9.5px] uppercase tracking-[0.14em]">
+      <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2.5 px-4 text-[12px]">
         {LAYERS.map((layer) => {
           const on = active === layer.key;
           const dim = active !== null && !on;
           return (
-            <button
+            <span
               key={layer.key}
               onMouseEnter={() => setActive(layer.key)}
               onMouseLeave={() => setActive(null)}
-              className={`pressable flex items-center gap-1.5 transition-opacity ${dim ? 'opacity-30' : ''} ${on ? 'text-os-text' : 'text-os-dim'}`}
+              className={`flex cursor-default items-center gap-2.5 transition-opacity ${dim ? 'opacity-30' : ''} ${on ? 'text-os-text' : 'text-os-dim'}`}
             >
               <svg width="18" height="6" aria-hidden>
                 <line x1="0" y1="3" x2="18" y2="3" stroke={layer.color} strokeWidth={on ? 3 : layer.fill ? 2.6 : 1.8} strokeDasharray={on ? undefined : layer.dash} />
               </svg>
               {layer.label}
-            </button>
+            </span>
           );
         })}
       </div>
 
       {/* the doctor line, or the sifted layer's name when hovering */}
-      <div className="flex items-baseline justify-center gap-2 pb-4 pt-2 font-mono">
+      <div className="flex items-baseline justify-center gap-3 pb-4 pt-2">
         {activeLayer ? (
-          <span className="text-[11px] uppercase tracking-[0.16em]" style={{ color: activeLayer.color === 'var(--text)' ? 'var(--text)' : activeLayer.color }}>
+          <span className="text-[12.5px]" style={{ color: activeLayer.color === 'var(--text)' ? 'var(--text)' : activeLayer.color }}>
             {activeLayer.label} · per pillar, 0 to 100
           </span>
         ) : (
           <>
-            <span className="text-2xl font-semibold text-os-ok">{health ?? '—'}</span>
-            <span className="text-[11px] text-os-dim">/ 100 health</span>
+            <span className="text-2xl font-normal tabular-nums">{health ?? '—'}</span>
+            <span className="text-[12.5px] text-os-dim">/ 100 health</span>
             {warnings > 0 && (
-              <>
-                <span className="text-os-border-strong">·</span>
-                <span className="text-[11px] font-semibold text-os-warn">
-                  {warnings} warning{warnings === 1 ? '' : 's'}
-                </span>
-              </>
+              <span className="flex items-baseline gap-2 text-[12.5px] text-os-muted">
+                <span className="dot warn self-center" />
+                {warnings} warning{warnings === 1 ? '' : 's'}
+              </span>
             )}
           </>
         )}

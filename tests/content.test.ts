@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { seedDatabase } from '@/lib/seed';
 import { contentAgents } from '@/lib/content';
 
-let db: FounderDb;
+let db: GladosDb;
 afterEach(() => db?.close());
 
 describe('contentAgents', () => {
@@ -11,11 +11,8 @@ describe('contentAgents', () => {
     db = openDb(':memory:');
     seedDatabase(db);
     const crew = contentAgents(db.agents.all());
-    expect(crew[0].id).toBe('social-agent');
     const ids = crew.map((a) => a.id);
-    for (const id of ['social-agent', 'postly-publisher', 'adsmith-creative', 'reelkit-editor', 'renderly-creative', 'dmflow-mcp']) {
-      expect(ids).toContain(id);
-    }
+    expect(ids).toContain('team-briefing');
   });
 
   test('only the content pillar — excludes other departments', () => {
@@ -33,6 +30,6 @@ describe('contentAgents', () => {
     const a = contentAgents(db.agents.all()).map((x) => x.id);
     const b = contentAgents(db.agents.all()).map((x) => x.id);
     expect(a).toEqual(b);
-    expect(a.length).toBeGreaterThanOrEqual(5);
+    expect(a.length).toBeGreaterThanOrEqual(1);
   });
 });

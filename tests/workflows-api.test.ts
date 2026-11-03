@@ -1,4 +1,4 @@
-process.env.FOUNDER_OS_DB = ':memory:';
+process.env.GLADOS_DB = ':memory:';
 
 import { describe, expect, test } from 'vitest';
 import { GET, POST } from '@/app/api/workflows/route';
@@ -47,9 +47,9 @@ const basicInput = {
 };
 
 describe('GET /api/workflows', () => {
-  test('lists exactly what the workflows table holds (the operator seeds its two machines; Slab seeded none)', async () => {
+  test('lists no workflows on a fresh install', async () => {
     const body = await (await GET()).json();
-    expect(body.workflows.map((w: { id: string }) => w.id)).toEqual(getDb().workflows.all().map((w) => w.id));
+    expect(body.workflows).toEqual([]);
   });
 });
 

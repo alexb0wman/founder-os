@@ -11,37 +11,70 @@ import {
   forceY,
   type Simulation,
 } from 'd3-force';
-import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardList, Maximize2, Minimize2, Sparkles, UserRound, Users, Wrench, X, type LucideIcon } from 'lucide-react';
-import { VantageMark } from '@/components/VantageMark';
-import { OsMarkGlyph } from '@/components/OsMark';
-import { DEPT_EXEC_TITLES, graphDirectory, orderGraphDepartments, SELF_ID, toolSlugOf, workerNodeId, type DirectoryGroup, type KGNode, type KGNodeKind, type KnowledgeGraph as KGData } from '@/lib/knowledge-graph';
+import { ArrowLeft, ChevronLeft, ChevronRight, ClipboardList, Maximize2, Sparkles, User, UserRound, Users, Wrench, X, type LucideIcon } from 'lucide-react';
+import { graphDirectory, orderGraphDepartments, SELF_ID, toolSlugOf, workerNodeId, type DirectoryGroup, type KGNode, type KGNodeKind, type KnowledgeGraph as KGData } from '@/lib/knowledge-graph';
 import { ACTION_LENSES, ENTITY_LENSES, FUNCTION_LENSES, lensNodeSet, type Lens } from '@/lib/graph-lens';
 import { GraphDirectory } from '@/components/GraphDirectory';
-import { GraphNodeCard } from '@/components/GraphNodeCard';
+import { GraphBrainContext } from '@/components/GraphBrainContext';
 import { branchPath, branchWidth, cyclicDeltaF, edgeArc, focusWheel, radialRestLayout, responsiveRingR, rotateAbout, shortestAngleDelta, treeLayout, wheelPoint, wheelStageGeom, wheelStageSpot, type RestLayoutResult, type TreeLayoutResult, type TreeNodePos } from '@/lib/tree-layout';
 import { rafThrottle } from '@/lib/raf-throttle';
-import { themedNodeColor } from '@/lib/kg-colors';
 import { buildToolWiki, prettifySlug } from '@/lib/agent-wiki';
-import type { WikiIndex } from '@/lib/brain-wiki';
 import { cameraRect, lerpRect, memoryNodePos, pickRestTier, R_CORE, type MemoryGraph, type Rect } from '@/lib/memory-core';
 import { searchMemoryNotes } from '@/lib/memory-search';
 import { headForDepartment } from '@/lib/personnel';
 import type { Agent, AgentRun, Department, Person, SopTask } from '@/lib/schemas';
 import {
-  AgentHarnessCard, GraphHumanDetailCard, HeadDetailCard, MemoryCoreCard, MemoryNoteCard, SopTaskDetailCard, ToolDetailCard,
+  AgentHarnessCard, GraphHumanDetailCard, MemoryNoteCard, SopTaskDetailCard, ToolDetailCard,
   type AgentLite, type ClientLite, type DeptLite, type ToolLite,
 } from '@/components/KnowledgeDetail';
 import { KnowledgeGraphFullscreen } from '@/components/KnowledgeGraphFullscreen';
-import { playbookFor } from '@/lib/sop-playbooks';
+import { usePalette } from '@/lib/use-palette';
+import { useGc } from '@/components/system-g/style-context';
+import { OPERATOR_NAME } from '@/lib/operator';
+
+// Team ("life area") node colors come from lib/life-map.ts's LIFE_AREAS,
+// which also feeds /api/life/map (Zod-validated as a plain hex string there),
+// so that source stays literal — the red re-tone happens here instead, at
+// the one place the server-built graph reaches a themed client. Only the
+// banned hues are remapped; knowledge's purple and the already-warm ones
+// pass through untouched.
+const FROST_LIFE_AREAS: Record<string, string> = {
+  '#3b82f6': '#9fc6ff',
+  '#14b8a6': '#6ee7ff',
+  '#22c55e': '#cfe4ff',
+};
+export const LIFE_AREA_MAPS: Record<string, Record<string, string>> = {
+  red: {
+    '#3b82f6': '#ff6a4d', // communication (blue)
+    '#14b8a6': '#ffab4f', // clients (teal)
+    '#22c55e': '#ffd98f', // finances (green)
+  },
+  light: {
+    '#3b82f6': '#2f6fd6',
+    '#14b8a6': '#0e8f80',
+    '#22c55e': '#1f9d4a',
+  },
+  frost: FROST_LIFE_AREAS,
+  'grey-frost': FROST_LIFE_AREAS,
+};
+const LIFE_AREA_RED_MAP = LIFE_AREA_MAPS.red;
+function remapGraphForRed(graph: KGData, isRed: boolean, map: Record<string, string> = LIFE_AREA_RED_MAP): KGData {
+  if (!isRed) return graph;
+  let changed = false;
+  const nodes = graph.nodes.map((n) => {
+    const mapped = n.color ? map[n.color] : undefined;
+    if (!mapped) return n;
+    changed = true;
+    return { ...n, color: mapped };
+  });
+  return changed ? { ...graph, nodes } : graph;
+}
 
 const W = 880;
 const H = 600;
 const CX = W / 2;
 const CY = H / 2;
 const RING_R = responsiveRingR(W, H); // self · teams · employees · tools — responsive to canvas
-// Paperclip board agents orbit between the memory core and the pillar ring —
-// clear water on both sides so the inner ring reads as its own tier
-const BOARD_R = RING_R[1] * 0.68;
 const MARGIN = 78; // horizontal margin for focus rows
 // focus mode: the wheel enlarges and its hub sinks below the canvas — the
 // focused tree grows out of the wheel's top; you turn INTO it (lib/tree-layout)
@@ -55,35 +88,28 @@ const RIM_DELTA_DEG = (WHEEL_GEOM.delta * 180) / Math.PI;
 // tools and SOP tasks smallest and dimmest — radius scales further with
 // connection count (see nodeRadius / TIER_OPACITY).
 const CAT: Record<KGNodeKind, { color: string; Icon: LucideIcon; label: string; r: number }> = {
-  self: { color: 'var(--text)', Icon: Sparkles, label: 'Obsidian', r: 18 },
+  self: { color: 'var(--text)', Icon: Sparkles, label: 'Notes', r: 18 },
   team: { color: 'var(--brain-1)', Icon: Users, label: 'Pillars', r: 15 },
-  // live Paperclip seats (Conductor, Forge, …) — the symmetric inner ring,
-  // wearing the OS emblem in white, deliberately no green
-  board: { color: 'var(--text)', Icon: OsMarkGlyph, label: 'Board agents', r: 10 },
   task: { color: 'var(--muted)', Icon: ClipboardList, label: 'SOP tasks', r: 7 },
-  person: { color: 'var(--kg-person, var(--warn))', Icon: UserRound, label: 'Humans', r: 10 },
-  employee: { color: 'var(--kg-employee, var(--accent))', Icon: VantageMark, label: 'AI agents', r: 10 },
+  person: { color: 'var(--warn)', Icon: UserRound, label: 'Humans', r: 10 },
+  employee: { color: 'var(--accent)', Icon: User, label: 'AI agents', r: 10 },
   tool: { color: 'var(--kg-tool)', Icon: Wrench, label: 'Tools', r: 7.5 },
 };
 
-// Everything reads bright at rest, deliberately kept lit up: the old tier
-// dimming made tools/tasks look dark from the top view.
+// Everything reads bright at rest .
 const TIER_OPACITY: Record<KGNodeKind, number> = {
   self: 1,
   team: 1,
-  board: 0.98,
   person: 0.98,
   employee: 0.98,
   task: 0.94,
   tool: 0.94,
 };
 
-// legend + hit-test order: the chain as it reads outward from the operator.
-// 'self' (the Obsidian core) stays ON the canvas but out of the right-side
-// legend: the core speaks for itself.
-const LEGEND_KINDS: KGNodeKind[] = ['team', 'board', 'task', 'person', 'employee', 'tool'];
+// legend + hit-test order: the chain as it reads outward from the operator
+const LEGEND_KINDS: KGNodeKind[] = ['self', 'team', 'task', 'person', 'employee', 'tool'];
 
-const nodeColor = (n: KGNode) => (n.color ? themedNodeColor(n.color) : CAT[n.kind].color);
+const nodeColor = (n: KGNode) => n.color ?? CAT[n.kind].color;
 
 // Each segment of the chain gets its own visible colour: the operator → department
 // (white) → SOP tasks (muted) → the worker who does the job (accent) → tools
@@ -95,7 +121,6 @@ const EDGE_COLOR: Record<string, string> = {
   member: 'var(--muted)',
   uses: 'var(--brain-2)',
   reports: 'var(--accent)',
-  board: 'var(--muted)',
 };
 
 // Task titles are whole jobs ("Broadcast directives across the fleet") — trim
@@ -115,7 +140,7 @@ const agoLabel = (iso: string): string => {
   return `${Math.floor(h / 24)}d ago`;
 };
 
-// ── the operator memory core (Obsidian constellation) ────────────────────────────
+// ── the operator memory core (Notes constellation) ────────────────────────────
 // Constellation disc scales: R_CORE lives in lib/memory-core (the spacing
 // contract against the pillar ring is unit-tested there); the disc shrinks at
 // the trunk base of a focused tree and blooms when the operator is expanded via
@@ -134,16 +159,17 @@ const hashStr = (s: string) => {
   return h;
 };
 
-// Obsidian-style folder tinting from the theme's existing palette — stable
+// Notes-style folder tinting from the theme's existing palette — stable
 // hash so a folder keeps its color across reloads.
-// The whole vault burns one HARD reddish orange (a deliberate choice)
-// — the per-node shimmer opacity plus the synapse sparks carry all the
-// variation. Hubs are the same fire, just bigger, with their radiating spokes.
-const HUB_COLOR = 'var(--kg-mem, #e35c35)';
-const NOTE_COLOR = 'var(--kg-mem, #e35c35)';
-const ORPHAN_COLOR = 'var(--kg-mem, #e35c35)'; // rim dust dims via its lower fill opacity
+// Console pass (2026-08): the vault rides the data ramp — one orchid hue
+// (was the hard reddish orange of the Monolith era); the per-node shimmer
+// opacity plus the synapse sparks carry all the variation. Hubs are the same
+// hue, just bigger, with their radiating spokes.
+const HUB_COLOR = 'var(--ramp-4)';
+const NOTE_COLOR = 'var(--ramp-4)';
+const ORPHAN_COLOR = 'var(--ramp-4)'; // rim dust dims via its lower fill opacity
 // the bright traveling sparks that fire along the links like synapses
-const SYNAPSE_COLOR = 'var(--kg-synapse, #ffb08a)';
+const SYNAPSE_COLOR = 'var(--ramp-2)';
 const SYNAPSE_N = 14;
 
 const memColor = (m: { id: string; cluster: number; links: number; type: string }) =>
@@ -209,7 +235,7 @@ type SimNode = KGNode & { x: number; y: number; vx?: number; vy?: number; fx?: n
 type SimLink = { source: SimNode | string; target: SimNode | string; kind: string };
 
 /**
- * The operator's operating-knowledge graph: the operator at the core, pillars (teams),
+ * the operator's operating-knowledge graph: the operator at the core, pillars (teams),
  * their written-out SOP tasks, the single worker (human or AI) who does each
  * job, and their tools — concentric, with live physics, a slowly-rotating
  * orbital backdrop and a faint drifting grid. Hover any node to trace its
@@ -219,53 +245,33 @@ type SimLink = { source: SimNode | string; target: SimNode | string; kind: strin
  * ← / → navigation and a rich detail panel.
  */
 export function KnowledgeGraph({
-  graph, agents = [], departments = [], people = [], tasks = [], memory, wiki, clients = [], runsByAgent = {}, boardLeads = {}, boardAgents = [], hermesUrl = null,
-  repelDefault = 150, linkDistDefault = 60, centerDefault = 0.32, fill = false,
-  activePillars, onShowAllPillars,
+  graph: rawGraph, agents = [], departments = [], people = [], tasks = [], memory, clients = [], runsByAgent = {},
+  repelDefault = 150, linkDistDefault = 60, centerDefault = 0.32,
 }: {
   graph: KGData; agents?: Agent[]; departments?: Department[]; people?: Person[]; tasks?: SopTask[];
-  /** distilled brain-store constellation drawn at the core (the operator's own memory) */
+  /** distilled brain-store constellation drawn at the core (the operator = his memory) */
   memory?: MemoryGraph;
-  /** the real brain-store pages behind the agent + tool nodes: summary, stated
-   *  fields, and the actual links in and out. Server-read, see lib/brain-wiki. */
-  wiki?: WikiIndex;
   /** the client roster shown when the Clients pillar is focused */
   clients?: ClientLite[];
   /** latest run per agent id, for the harness card */
   runsByAgent?: Record<string, AgentRun>;
-  /** live Paperclip lead per department id — powers the head card's board seat + Run */
-  boardLeads?: Record<string, { id: string; name: string; status: string; model: string | null }>;
-  /** the non-lead Paperclip seats drawn as the inner board ring — live status + Run per node */
-  boardAgents?: { id: string; name: string; status: string; model: string | null }[];
-  /** the Hermes worker-pool dashboard, embedded live in the Hermes seat's card */
-  hermesUrl?: string | null;
-  /** fill the parent's height instead of the default fixed 680px canvas (the
-   *  single-view G-Brain tab) */
-  fill?: boolean;
   /** physics tuning (the in-UI editor is retired; these still configure the sim) */
   repelDefault?: number; linkDistDefault?: number; centerDefault?: number;
-  /** the pillar chips above the wheel: department ids still switched on. A
-   *  pillar switched off dims its nodes AND drops its directory rows. Undefined
-   *  means no chip row is mounted, so nothing filters. */
-  activePillars?: string[];
-  /** wired = the directory's empty state can switch every pillar back on */
-  onShowAllPillars?: () => void;
 }) {
+  const palette = usePalette();
+  // GladOS tree (glados-ui S05 F05.13): kit control classes; Classic classes unchanged otherwise.
+  const gc = useGc();
+  const graph = useMemo(() => remapGraphForRed(rawGraph, palette.name in LIFE_AREA_MAPS, LIFE_AREA_MAPS[palette.name]), [rawGraph, palette.name]);
   // fixed physics — the slider editor gave way to the always-on directory
   const centerForce = centerDefault;
   const repel = repelDefault;
   const linkDist = linkDistDefault;
   const [hoverId, setHoverId] = useState<string | null>(null);
-  // the hover card is sticky: it keeps the last node the pointer touched so
-  // its own controls stay reachable after the pointer leaves the node
-  const [cardId, setCardId] = useState<string | null>(null);
   const [focusId, setFocusId] = useState<string | null>(null);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [selectedHumanId, setSelectedHumanId] = useState<string | null>(null);
-  const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
-  const [selectedBoardId, setSelectedBoardId] = useState<string | null>(null);
   const [coreExpanded, setCoreExpanded] = useState(false);
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(null);
   const [memHoverId, setMemHoverId] = useState<string | null>(null);
@@ -276,10 +282,6 @@ export function KnowledgeGraph({
   // the everything-index can be tucked away (inline + fullscreen) so the wheel
   // is viewable unobstructed; one toggle drives both mounts
   const [directoryCollapsed, setDirectoryCollapsed] = useState(false);
-  // the detail card can grow from the docked sliver into a wide right column
-  // (replacing the directory) so it isn't a tiny sliver — the graph stays
-  // visible and reflows, never covered
-  const [detailExpanded, setDetailExpanded] = useState(false);
 
   const memoryOn = !!memory && memory.nodes.length > 0;
 
@@ -289,12 +291,6 @@ export function KnowledgeGraph({
   const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<{ id: string; moved: boolean; startX: number; startY: number } | null>(null);
   const suppressClickRef = useRef(false);
-  // Manual camera: scroll-wheel zooms about the cursor,
-  // dragging the canvas pans. Both write this rect and the glide loop honours
-  // it until the next click hands control back to the auto framing.
-  const userViewRef = useRef<Rect | null>(null);
-  const panRef = useRef<{ px: number; py: number; x: number; y: number; k: number; moved: boolean } | null>(null);
-  const panSuppressRef = useRef(false);
   const [, setTick] = useState(0);
 
   const agentById = useMemo(() => new Map(agents.map((a) => [`emp:${a.id}`, a])), [agents]);
@@ -394,9 +390,6 @@ export function KnowledgeGraph({
     } else if (isWorker(node.kind)) {
       set.add(SELF_ID);
       chainOfWorker(id, set);
-    } else if (node.kind === 'board') {
-      // a board seat's only wire is its line to the operator
-      set.add(SELF_ID);
     } else if (node.kind === 'tool') {
       for (const w of workersOfTool.get(id) ?? []) chainOfWorker(w, set);
     } else {
@@ -421,7 +414,7 @@ export function KnowledgeGraph({
   // Organic bottom-to-top tree for EVERY pillar: department at the base
   // (trunk) → SOP tasks (limbs) → each task's single worker directly above it
   // → tools (canopy). One layout per department, because the wheel mounts the
-  // departments in EXPANDED form: the flanks carry their whole tree
+  // departments in EXPANDED form : the flanks carry their whole tree
   // tilted on the rim and a step rigidly rotates them into position.
   const allTrees: Map<string, TreeLayoutResult> = useMemo(() => {
     const byLabel = (a: string, b: string) => (byId.get(a)?.label ?? '').localeCompare(byId.get(b)?.label ?? '');
@@ -478,47 +471,7 @@ export function KnowledgeGraph({
       workerIds: workersOfTeam.get(t.id) ?? [],
       toolIds: toolsByPillar.get(t.id) ?? [],
     }));
-    const layout = radialRestLayout({ selfId: SELF_ID, pillars, ringR: RING_R, cx: CX, cy: CY });
-    // Paperclip board agents ride one clean inner ring, seated at the
-    // midpoints of the WIDEST gaps between the actual pillar spokes — the
-    // pillar wedges are density-weighted, so fixed even angles kept dropping
-    // seats into a pillar's label lane. Same radius everywhere = still reads as a ring.
-    const board = graph.nodes.filter((n) => n.kind === 'board');
-    if (board.length) {
-      const TAU = Math.PI * 2;
-      const pillarAngles = graph.nodes
-        .filter((n) => n.kind === 'team')
-        .map((t) => layout.positions.get(t.id))
-        .filter((p): p is { x: number; y: number } => !!p)
-        .map((p) => Math.atan2(p.y - CY, p.x - CX))
-        .sort((a, b) => a - b);
-      const gaps = pillarAngles.map((a, i) => {
-        const span = (pillarAngles[(i + 1) % pillarAngles.length] - a + TAU) % TAU || TAU;
-        return { start: a, span };
-      });
-      // Seats go to whichever gap offers the most ELBOW ROOM per seat
-      // (D'Hondt): wide wedges host two before a narrow gap hosts one, so no
-      // seat is ever squeezed against a pillar's spoke and label.
-      const counts = gaps.map(() => 0);
-      for (let s = 0; s < board.length; s++) {
-        let best = 0;
-        for (let i = 1; i < gaps.length; i++) {
-          if (gaps[i].span / (counts[i] + 1) > gaps[best].span / (counts[best] + 1)) best = i;
-        }
-        counts[best]++;
-      }
-      const spots: number[] = [];
-      gaps.forEach((g, i) => {
-        for (let j = 0; j < counts[i]; j++) spots.push(g.start + g.span * ((j + 1) / (counts[i] + 1)));
-      });
-      spots.sort((a, b) => a - b);
-      board.forEach((n, i) => {
-        // fallback: the evenly-divided ring (demo data may seed no pillars)
-        const a = spots[i] ?? -Math.PI / 2 + ((i + 0.5) / board.length) * Math.PI * 2;
-        layout.positions.set(n.id, { x: CX + BOARD_R * Math.cos(a), y: CY + BOARD_R * Math.sin(a) });
-      });
-    }
-    return layout;
+    return radialRestLayout({ selfId: SELF_ID, pillars, ringR: RING_R, cx: CX, cy: CY });
   }, [graph, tasksOfTeam, workersOfTeam, workersOfTool, teamOfWorker]);
 
   // Staggered label rows for the focused tree: within each band (tasks,
@@ -607,35 +560,11 @@ export function KnowledgeGraph({
   // so every sector's rim spot sweeps continuously along the arc: pressing an
   // arrow ROTATES the wheel and the neighbor arcs up into the top view.
   // stageVel gives it MASS: the turn winds up, coasts, and settles like a
-  // large wheel instead of springing, reading as one deliberate wheel animation.
+  // large wheel instead of springing .
   const stagePhaseRef = useRef(0);
   const stageTargetRef = useRef(0);
   const stageVelRef = useRef(0);
   const rimGuideRef = useRef<SVGGElement | null>(null);
-
-  // The uniform scale the link-distance slider applies to the home sunburst.
-  // Lives out here because the go-home tween and the physics must aim at the
-  // EXACT same spot — if they disagree the tween lands and the sim drags every
-  // node off the circle again.
-  const spreadK = () => Math.max(0.7, Math.min(1.18, 0.7 + (linkRef.current - 10) / 180));
-  /** A node's exact resting spot in the home sunburst (wheel rotation included). */
-  const homeSpotOf = (d: SimNode) => {
-    const r = restRef.current.get(d.id);
-    if (!r) return null;
-    const p = rotateAbout(r, { x: CX, y: CY }, wheelRef.current);
-    const k = spreadK();
-    return { x: (p.x - CX) * k + CX, y: (p.y - CY) * k + CY };
-  };
-  // The go-home glide (see clearAll). Leaving the return trip to the physics
-  // never worked: coming out of a focused tree a node has up to ~1000px to
-  // travel, and the sim's alpha decays to zero after ~5s having closed only
-  // ~70% of that — so the wheel froze in a lopsided half-collapsed ring
-  // (pillars stuck at r≈66..210 instead of a clean r≈105) and you had to click
-  // a SECOND time to kick the sim again. This tween pins every node onto its
-  // exact resting spot over one short glide, so one click always lands the
-  // perfect circle.
-  const homeTweenRef = useRef<{ t0: number; from: Map<string, { x: number; y: number }> } | null>(null);
-  const HOME_TWEEN_MS = 820;
 
   /* eslint-disable @typescript-eslint/no-explicit-any */
   function configure(sim: Simulation<SimNode, undefined>) {
@@ -651,7 +580,7 @@ export function KnowledgeGraph({
     const restStrength = () => centerRef.current;
     // Link-distance slider scales how far the linked rings sit from the centre
     // (edge length / overall spread) — a uniform scale, so symmetry is preserved.
-    const spread = spreadK;
+    const spread = () => Math.max(0.7, Math.min(1.18, 0.7 + (linkRef.current - 10) / 180));
     // Open memory pushes the pillar gateways radially outward so they clear
     // the constellation; everything else keeps its resting spot (dimmed).
     const pushK = (d: SimNode) =>
@@ -665,7 +594,7 @@ export function KnowledgeGraph({
       if (focused()) return wheelPoint(r, { x: CX, y: CY }, FOCUS_WHEEL, wheelRef.current);
       return rotateAbout(r, { x: CX, y: CY }, wheelRef.current);
     };
-    // the rim (a huge wheel with the departments ALREADY expanded):
+    // the rim :
     // every department's full tree is mounted on the rim at its sector angle
     // and rigidly rotated about the sunken hub by the LIVE eased phase — an
     // arrow press rotates the whole assembly clockwise/counterclockwise and
@@ -709,12 +638,18 @@ export function KnowledgeGraph({
     // below re-reads targetOf() every tick instead, so the rim genuinely
     // rotates under the nodes; forceX/Y stand down for every staged node.
     const staged = (d: SimNode) => focused() && !!(rim(d) ?? tgt(d));
+    // The pillar ring holds a CIRCLE .
+    // Teams + self get a near-rigid pull to their ring-1 rest spots so
+    // charge/link/collide can't smear the hexagon; branch nodes keep the
+    // loose floaty hold and are free to disperse as they grow.
+    const holdStrength = (d: SimNode) =>
+      d.kind === 'team' || d.kind === 'self' ? 0.85 : Math.max(restStrength(), settleBoostRef.current);
     (sim.force('x') as any)
       .x((d: SimNode) => restX(d))
-      .strength((d: SimNode) => (staged(d) ? 0 : Math.max(restStrength(), settleBoostRef.current)));
+      .strength((d: SimNode) => (staged(d) ? 0 : holdStrength(d)));
     (sim.force('y') as any)
       .y((d: SimNode) => restY(d))
-      .strength((d: SimNode) => (staged(d) ? 0 : Math.max(restStrength(), settleBoostRef.current)));
+      .strength((d: SimNode) => (staged(d) ? 0 : holdStrength(d)));
     {
       let stageNodes: SimNode[] = [];
       const stageForce = ((alpha: number) => {
@@ -732,6 +667,28 @@ export function KnowledgeGraph({
         stageNodes = ns;
       };
       sim.force('stage', stageForce);
+    }
+    {
+      // Pillar lock: forceX/Y scale with alpha, so charge leaves the teams a
+      // visible few px off the ring at equilibrium. This force eases team
+      // nodes DIRECTLY onto their exact rest targets (alpha-independent), so
+      // the pillar ring stays a true circle; dragging still wins (d3 re-pins
+      // fx/fy after forces), and focus mode stands down for the stage/rim.
+      let lockNodes: SimNode[] = [];
+      const pillarLock = (() => {
+        if (focused()) return;
+        for (const d of lockNodes) {
+          if (d.fx != null || d.fy != null) continue;
+          d.x = (d.x ?? 0) + (restX(d) - (d.x ?? 0)) * 0.55;
+          d.y = (d.y ?? 0) + (restY(d) - (d.y ?? 0)) * 0.55;
+          d.vx = (d.vx ?? 0) * 0.4;
+          d.vy = (d.vy ?? 0) * 0.4;
+        }
+      }) as any;
+      pillarLock.initialize = (ns: SimNode[]) => {
+        lockNodes = ns.filter((n) => n.kind === 'team');
+      };
+      sim.force('pillarlock', pillarLock);
     }
     // resting targets already encode the rings, so radial only guards stragglers
     (sim.force('radial') as any).strength((d: SimNode) => (tgt(d) || rest(d) ? 0 : 0.4));
@@ -848,7 +805,7 @@ export function KnowledgeGraph({
   });
   camRef.current = {
     focusTree: !!focusTree,
-    selectedOrgId: selectedAgentId ?? selectedHumanId ?? selectedHeadId ?? selectedBoardId ?? selectedTaskId ?? selectedToolId,
+    selectedOrgId: selectedAgentId ?? selectedHumanId ?? selectedTaskId ?? selectedToolId,
     coreExpanded,
     selectedMemoryId,
     coreScale: coreExpanded ? CORE_SCALE_EXPANDED : focusTree ? CORE_SCALE_TREE : 1,
@@ -860,7 +817,7 @@ export function KnowledgeGraph({
   const memProjRef = useRef(memProjById);
   memProjRef.current = memProjById;
 
-  // Whole-disc orbit for the host Obsidian field: one slow rotation of the
+  // Whole-disc orbit for the mini Notes field: one slow rotation of the
   // entire constellation (edges + notes together, so geometry never detaches)
   // driven imperatively from the camera rAF — zero React re-renders. Frozen
   // while the core is open so notes hold still for reading and clicking.
@@ -889,40 +846,6 @@ export function KnowledgeGraph({
       // accessors read wheelRef live, so the whole background glides with it
       const wd = shortestAngleDelta(wheelRef.current, wheelTargetRef.current);
       if (Math.abs(wd) > 0.0005) wheelRef.current += wd * 0.075;
-      // the go-home glide: pin every node onto an eased path to its exact
-      // resting spot, then hand it back to the physics. Pinning (fx/fy) is what
-      // makes it land — the other forces can't drag a pinned node off course,
-      // so the circle that forms is the real sunburst, every time.
-      const tween = homeTweenRef.current;
-      if (tween && (c.focusTree || c.coreExpanded || c.selectedOrgId || c.selectedMemoryId)) {
-        // you went somewhere else mid-glide — unpin and let the physics take it
-        for (const n of nodesRef.current) {
-          n.fx = null;
-          n.fy = null;
-        }
-        homeTweenRef.current = null;
-      } else if (tween) {
-        const k = Math.min(1, (nowT - tween.t0) / HOME_TWEEN_MS);
-        const e = 1 - Math.pow(1 - k, 3); // easeOutCubic — decisive, no bounce
-        for (const n of nodesRef.current) {
-          const to = homeSpotOf(n);
-          const from = tween.from.get(n.id);
-          if (!to || !from) continue;
-          n.fx = n.x = from.x + (to.x - from.x) * e;
-          n.fy = n.y = from.y + (to.y - from.y) * e;
-          n.vx = 0;
-          n.vy = 0;
-        }
-        if (k >= 1) {
-          for (const n of nodesRef.current) {
-            n.fx = null;
-            n.fy = null;
-          }
-          homeTweenRef.current = null;
-          // barely warm: the nodes are already home, this just lets them breathe
-          simRef.current?.alpha(0.05).restart();
-        }
-      }
       // ease the STAGE PHASE with inertia — velocity chases the error, phase
       // integrates velocity, so the turn winds up, coasts, and settles like a
       // massive wheel; keep the sim warm for the whole sweep or the nodes
@@ -1013,21 +936,17 @@ export function KnowledgeGraph({
       const rProj = proj
         ? { vx: proj.vx * Math.cos(th) - proj.vy * Math.sin(th), vy: proj.vx * Math.sin(th) + proj.vy * Math.cos(th) }
         : null;
-      // a manual wheel/drag camera overrides the auto framing until cleared
-      const target =
-        userViewRef.current ??
-        cameraRect(
-          { w: W, h: H },
-          {
-            focusedTeam: c.focusTree,
-            coreExpanded: c.coreExpanded,
-            coreCenter,
-            selectedNodePos: posOf(c.selectedOrgId),
-            memorySelectedPos: rProj ? memoryNodePos(rProj, coreCenter, R_CORE * c.coreScale) : null,
-          },
-        );
-      const goingHome =
-        !userViewRef.current && !c.focusTree && !c.coreExpanded && !c.selectedOrgId && !c.selectedMemoryId;
+      const target = cameraRect(
+        { w: W, h: H },
+        {
+          focusedTeam: c.focusTree,
+          coreExpanded: c.coreExpanded,
+          coreCenter,
+          selectedNodePos: posOf(c.selectedOrgId),
+          memorySelectedPos: rProj ? memoryNodePos(rProj, coreCenter, R_CORE * c.coreScale) : null,
+        },
+      );
+      const goingHome = !c.focusTree && !c.coreExpanded && !c.selectedOrgId && !c.selectedMemoryId;
       const next = lerpRect(cur, target, reduced ? 1 : goingHome ? CAM_EASE_HOME : CAM_EASE);
       if (next !== cur) {
         cur = next;
@@ -1093,25 +1012,7 @@ export function KnowledgeGraph({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [lensId, graph],
   );
-  // Pillar chips: a switched-off pillar dims every node under it. All pillars
-  // on = no filter at all (null), all pillars off = an empty lit set, so the
-  // whole wheel dims and the directory says "No pillars selected."
-  const pillarLit = useMemo(() => {
-    if (!activePillars || activePillars.length === departments.length) return null;
-    const on = new Set(activePillars.map((id) => `team:${id}`));
-    const set = new Set<string>();
-    for (const n of graph.nodes) {
-      const team = teamForFocus(n.id);
-      if (team && on.has(team)) set.add(n.id);
-    }
-    if (set.size > 0) set.add(SELF_ID);
-    return set;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activePillars, departments.length, graph]);
-  // two dimmers can be armed at once (a lens AND a pillar filter): a node has
-  // to survive both to stay lit
-  const bothLit = lensLit && pillarLit ? new Set([...lensLit].filter((id) => pillarLit.has(id))) : lensLit ?? pillarLit;
-  const lit = focusSet ?? (hoverId ? litFor(hoverId) : null) ?? bothLit;
+  const lit = focusSet ?? (hoverId ? litFor(hoverId) : null) ?? lensLit;
   const posById = new Map(nodes.map((n) => [n.id, n]));
   const focusedTeam = focusTeamId ? byId.get(focusTeamId) : null;
 
@@ -1166,7 +1067,7 @@ export function KnowledgeGraph({
   sparkSegsRef.current = sparkSegs;
   const sparkRefs = useRef<(SVGCircleElement | null)[]>([]);
   const synapseRotGRef = useRef<SVGGElement | null>(null);
-  // note → direct neighbors, for the Obsidian-style hover: the pointed-at note
+  // note → direct neighbors, for the Notes-style hover: the pointed-at note
   // lights up its linked notes and the links between them
   const memAdj = useMemo(() => {
     const m = new Map<string, string[]>();
@@ -1193,7 +1094,7 @@ export function KnowledgeGraph({
       orderGraphDepartments(
         graph.nodes.filter((n) => n.kind === 'team'),
         (t) => t.id.replace('team:', ''),
-      ).map((t) => ({ id: t.id, color: t.color ? themedNodeColor(t.color) : 'var(--brain-1)' })),
+      ).map((t) => ({ id: t.id, color: t.color ?? 'var(--brain-1)' })),
     [graph],
   );
   const commRefs = useRef(new Map<string, SVGCircleElement>());
@@ -1235,7 +1136,7 @@ export function KnowledgeGraph({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fullscreen]);
 
-  // "/" focuses the vault search whenever the Obsidian core is open — works
+  // "/" focuses the vault search whenever the Notes core is open — works
   // in both the inline view and fullscreen (registered independently of the
   // mode-specific handlers above)
   useEffect(() => {
@@ -1370,6 +1271,19 @@ export function KnowledgeGraph({
           </g>
         ))}
         </g>
+
+        {/* the middle of the brain is Notes: all of the operator's markdown */}
+        <text
+          y={R_CORE + 22}
+          textAnchor="middle"
+          fontFamily="var(--font-sans)"
+          fontWeight={500}
+          fill="var(--text-2)"
+          opacity={coreExpanded ? 0 : 1}
+          style={{ transition: 'opacity 400ms ease', ...fixedLabel(10, coreScale) }}
+        >
+          Notes
+        </text>
       </g>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1383,8 +1297,8 @@ export function KnowledgeGraph({
     () => (
       <>
         {/* (No edge vignette: on light themes its var(--bg) overlay painted a
-            darker rectangular frame around a lighter center, a faint box
-            around the canvas. The canvas now fills the frame cleanly.) */}
+            darker rectangular frame around a lighter center — the "faint box"
+            the operator flagged. The canvas now fills the frame cleanly.) */}
         {/* ring guides ride the same wheel as the nodes: small sunburst at
             home, huge low-hub arcs in focus — cx/cy/r are CSS-transitionable,
             so the rails visibly morph into the apparatus instead of floating
@@ -1435,7 +1349,6 @@ export function KnowledgeGraph({
         (workersOfTool.get(selectedToolId) ?? []).map(
           (w) => agentById.get(w)?.name ?? personById.get(w)?.name ?? byId.get(w)?.label ?? w,
         ),
-        wiki,
       )
     : null;
 
@@ -1443,7 +1356,7 @@ export function KnowledgeGraph({
   const toolChips = (workerId: string | null) =>
     (workerId ? toolsOfWorker.get(workerId) ?? [] : []).map((t) => {
       const slug = toolSlugOf(t);
-      return { slug, name: prettifySlug(slug), mcp: buildToolWiki(slug, [], wiki).mcp };
+      return { slug, name: prettifySlug(slug), mcp: buildToolWiki(slug).mcp };
     });
 
   const selectedTask = selectedTaskId ? taskById.get(selectedTaskId) : null;
@@ -1464,7 +1377,7 @@ export function KnowledgeGraph({
           teamId: t.id,
           deptId,
           name: t.label,
-          color: t.color ? themedNodeColor(t.color) : 'var(--brain-1)',
+          color: t.color ?? 'var(--brain-1)',
           tagline: departments.find((d) => d.id === deptId)?.tagline ?? '',
         };
       }),
@@ -1491,21 +1404,16 @@ export function KnowledgeGraph({
     setSelectedToolId(null);
     setSelectedTaskId(null);
     setSelectedHumanId(null);
-    setSelectedHeadId(null);
-    setSelectedBoardId(null);
     setSelectedMemoryId(null);
-    setDetailExpanded(false);
   };
   const settleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const clearAll = () => {
-    userViewRef.current = null; // hand the camera back to the auto framing
     setFocusId(null);
     setCoreExpanded(false);
     clearDetail();
-    // GLIDE back to the main view: the tree unwinds and every node
-    // flows firmly onto its sunburst spot, and LANDS there: the rAF drives the
-    // glide directly (homeTweenRef) rather than asking the sim to cover the
-    // distance before its alpha runs out. One click, one exact circle.
+    // GLIDE back to the main view  — the tree unwinds and every node
+    // flows firmly onto its sunburst spot: a near-rigid rest pull for ~1.1s so
+    // the circle re-forms visibly but decisively, no tornado aftermath.
     wheelTargetRef.current = wheelRef.current; // stop mid-turn where it stands
     for (const n of nodesRef.current) {
       n.fx = null;
@@ -1517,23 +1425,6 @@ export function KnowledgeGraph({
       settleBoostRef.current = 0;
       settleTimerRef.current = null;
     }, 1100);
-    const reducedMotion =
-      typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (reducedMotion) {
-      // no glide under reduced motion: place every node on its spot at once
-      for (const n of nodesRef.current) {
-        const h = homeSpotOf(n);
-        if (!h) continue;
-        n.x = h.x; n.y = h.y; n.vx = 0; n.vy = 0;
-      }
-      homeTweenRef.current = null;
-      simRef.current?.alpha(0.02).restart();
-      return;
-    }
-    homeTweenRef.current = {
-      t0: performance.now(),
-      from: new Map(nodesRef.current.map((n) => [n.id, { x: n.x ?? CX, y: n.y ?? CY }])),
-    };
     simRef.current?.alpha(0.35).restart();
   };
   const navDept = (teamId: string) => {
@@ -1585,12 +1476,10 @@ export function KnowledgeGraph({
 
   // the everything-index: every agent, human, SOP and tool, grouped and
   // alphabetized. Click = jump the graph to that node; hover = pre-light it.
-  const directory = useMemo(() => {
-    const groups = graphDirectory(agents, departments, people, tasks, graph);
-    if (!activePillars || activePillars.length === departments.length) return groups;
-    const on = new Set(activePillars);
-    return groups.map((g) => ({ ...g, rows: g.rows.filter((r) => r.deptIds.some((d) => on.has(d))) }));
-  }, [agents, departments, people, tasks, graph, activePillars]);
+  const directory = useMemo(
+    () => graphDirectory(agents, departments, people, tasks, graph),
+    [agents, departments, people, tasks, graph],
+  );
   const pickFromDirectory = (kind: DirectoryGroup['kind'], id: string) => {
     if (kind === 'tool') selectToolSlug(id);
     else if (kind === 'task') selectTask(id);
@@ -1604,54 +1493,24 @@ export function KnowledgeGraph({
     const nodeId = kind === 'tool' ? graph.nodes.find((n) => n.kind === 'tool' && toolSlugOf(n.id) === id)?.id ?? null : id;
     setHoverId(nodeId);
   };
-  // Mock 1d: the node hover card. It names whatever the pointer last touched
-  // and stays put once shown, so "open note" and "gbrain › query" are clickable.
-  useEffect(() => {
-    if (hoverId) setCardId(hoverId);
-  }, [hoverId]);
-  const cardNode = cardId ? byId.get(cardId) ?? null : null;
-  const openCardNode = () => {
-    if (!cardNode) return;
-    if (cardNode.kind === 'tool') selectToolSlug(toolSlugOf(cardNode.id));
-    else if (cardNode.kind === 'task') selectTask(cardNode.id);
-    else if (isWorker(cardNode.kind)) selectWorker(cardNode.id);
-    else if (cardNode.kind === 'team') navDept(cardNode.id);
-  };
-  const nodeCard = cardNode ? (
-    <div className="absolute bottom-3 left-3 z-20">
-      <GraphNodeCard
-        label={cardNode.label}
-        kind={cardNode.kind}
-        links={(adjacency.get(cardNode.id)?.size ?? 1) - 1}
-        sub={byId.get(teamForFocus(cardNode.id) ?? '')?.label}
-        onOpen={openCardNode}
-        onDismiss={() => {
-          setCardId(null);
-          setHoverId(null);
-        }}
-      />
-    </div>
-  ) : null;
-
   const directoryPanel = (
-    <GraphDirectory groups={directory} onPick={pickFromDirectory} onHover={hoverFromDirectory} onShowAllPillars={onShowAllPillars} collapsed={directoryCollapsed} onToggleCollapse={() => setDirectoryCollapsed((v) => !v)} className="h-full" />
+    <GraphDirectory groups={directory} onPick={pickFromDirectory} onHover={hoverFromDirectory} collapsed={directoryCollapsed} onToggleCollapse={() => setDirectoryCollapsed((v) => !v)} className="h-full" />
   );
 
   // compact legend for the fullscreen wheel: color + icon per kind, with the
-  // Obsidian core in its vault orange
+  // Notes core in its vault orange
   const compactLegend = (
-    <div className="flex items-center gap-3 rounded-sm-t border border-os-border-strong bg-os-bg/85 px-2.5 py-1.5 backdrop-blur">
+    <div className={gc('kg-hud flex items-center gap-4 px-3.5 py-2.5', 'glass-chip flex items-center gap-4 px-3.5 py-2.5')}>
       {(
         [
-          { label: 'Obsidian', color: HUB_COLOR, Icon: CAT.self.Icon },
-          { label: 'Board agent', color: CAT.board.color, Icon: CAT.board.Icon },
+          { label: 'Notes', color: HUB_COLOR, Icon: CAT.self.Icon },
           { label: 'Human', color: CAT.person.color, Icon: CAT.person.Icon },
           { label: 'AI agent', color: CAT.employee.color, Icon: CAT.employee.Icon },
           { label: 'Tool', color: CAT.tool.color, Icon: CAT.tool.Icon },
           { label: 'SOP task', color: CAT.task.color, Icon: CAT.task.Icon },
         ] as const
       ).map(({ label, color, Icon }) => (
-        <span key={label} className="flex items-center gap-1.5 font-mono text-[9.5px] text-os-muted">
+        <span key={label} className="flex items-center gap-2.5 text-[11.5px] text-os-muted">
           <Icon className="h-3 w-3" style={{ color }} strokeWidth={2} />
           {label}
         </span>
@@ -1677,16 +1536,14 @@ export function KnowledgeGraph({
       aria-label="Search the vault"
       title="Press / to search the vault"
       spellCheck={false}
-      className="w-40 rounded-sm-t border border-os-border-strong bg-os-bg/85 px-2 py-1.5 font-mono text-[10.5px] text-os-text placeholder:text-os-dim backdrop-blur outline-none state-fade focus:border-os-accent"
+      className={gc('g-input kg-vault-search', 'glass-chip w-40 px-3 py-2 text-[12.5px] text-os-text placeholder:text-os-dim outline-none transition-colors focus:border-os-accent')}
     />
   ) : null;
 
   const onNodeClick = (n: KGNode) => {
-    // any selection glides the AUTO camera to its frame — drop the manual view
-    userViewRef.current = null;
     if (n.kind === 'self') {
-      // the operator IS the memory: clicking it dives into (or out of) the
-      // constellation. Without memory data it stays the old clear-all anchor.
+      // the operator IS the memory: clicking him dives into (or out of) the
+      // constellation. Without memory data he stays the old clear-all anchor.
       if (memoryOn) {
         const entering = !coreExpanded;
         setFocusId(null);
@@ -1720,215 +1577,75 @@ export function KnowledgeGraph({
       setFocusId((f) => teamForFocus(n.id) ?? f);
       clearDetail();
       if (!was) setSelectedToolId(n.id);
-    } else if (n.kind === 'board') {
-      // board seats live outside the department wheel — card only, no focus
-      const was = selectedBoardId === n.id;
-      setFocusId(null);
-      clearDetail();
-      if (!was) setSelectedBoardId(n.id);
     } else {
-      // Pillar click — the department node IS the department-head agent:
-      // expand the pillar AND pull up its exec card.
-      const entering = focusId !== n.id;
       clearDetail();
-      setFocusId(entering ? n.id : null);
-      if (n.kind === 'team' && entering) setSelectedHeadId(n.id);
+      setFocusId((f) => (f === n.id ? null : n.id));
     }
   };
 
   // ── detail cards (shared by the inline overlay + fullscreen) ────────────────
-  // ── detail cards, memoized ──────────────────────────────────────────────────
-  // The whole component re-renders on every frame-throttled sim tick (setTick).
-  // These cards are heavy (the SOP card especially), so each is memoized on its
-  // selection id: the element reference stays identical across ticks and React
-  // skips reconciling the subtree. Callbacks/lookups are closed over and are
-  // behaviourally stable (setState + pure maps over stable data), so they're
-  // safe to omit from the deps.
-  const headCard = useMemo(() => {
-    if (!selectedHeadId) return null;
-    const teamNode = byId.get(selectedHeadId);
-    if (!teamNode) return null;
-    const deptId = selectedHeadId.replace('team:', '');
-    const color = teamNode.color ?? 'var(--brain-1)';
-    const sops = (tasksOfTeam.get(selectedHeadId) ?? [])
-      .map((tid) => taskById.get(tid))
-      .filter((t): t is SopTask => !!t)
-      .map((t) => ({ id: `task:${t.id}`, title: t.title, skillName: playbookFor(t).skill.name }));
-    return (
-      <HeadDetailCard
-        title={DEPT_EXEC_TITLES[deptId] ?? 'Lead'}
-        deptName={teamNode.label}
-        color={color}
-        boardLead={boardLeads[deptId] ?? null}
-        sops={sops}
-        onClose={() => setSelectedHeadId(null)}
-        onTask={(taskId) => selectTask(taskId)}
-      />
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedHeadId, byId, tasksOfTeam, taskById, boardLeads]);
+  const agentCard = selectedAgent ? (
+    <AgentHarnessCard
+      agent={selectedAgent}
+      task={selectedAgentTask}
+      parentName={selectedAgentParent?.name ?? null}
+      parentAgentId={selectedAgentParent?.id ?? null}
+      subAgents={selectedAgentSubs}
+      lastRun={selectedAgentRun}
+      runLabel={selectedAgentRun ? agoLabel(selectedAgentRun.finishedAt) : null}
+      headName={agentHeadName}
+      onClose={() => setSelectedAgentId(null)}
+      onTool={selectToolSlug}
+      onAgent={(id) => selectAgent(`emp:${id}`)}
+      onTask={selectedAgentTaskId ? () => selectTask(selectedAgentTaskId) : undefined}
+    />
+  ) : null;
 
-  // A clicked board seat reuses the exec card shell: live status + model +
-  // the real Run heartbeat, minus the SOP block (board agents own no dept SOPs).
-  const boardCard = useMemo(() => {
-    if (!selectedBoardId) return null;
-    const node = byId.get(selectedBoardId);
-    if (!node) return null;
-    const live = boardAgents.find((a) => `board:${a.id}` === selectedBoardId) ?? null;
-    return (
-      <HeadDetailCard
-        title={node.label}
-        deptName="Paperclip board"
-        roleLabel="board agent"
-        blurb={
-          <>
-            Live seat on the <span className="font-semibold">Paperclip board</span> — a real agent in the operator&apos;s
-            company, reporting straight to the core.
-          </>
-        }
-        showSops={false}
-        color={CAT.board.color}
-        boardLead={live}
-        sops={[]}
-        embed={/hermes/i.test(node.label) && hermesUrl ? { url: hermesUrl, title: 'Hermes worker pool' } : null}
-        onClose={() => setSelectedBoardId(null)}
-      />
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBoardId, byId, boardAgents, hermesUrl]);
+  const taskRuntime = (() => {
+    if (!selectedTask) return null;
+    if (selectedTask.assigneeKind === 'person') return 'human · judgment call';
+    const a = agents.find((x) => x.id === selectedTask.assigneeId);
+    return a ? `${a.instance} · ${a.model}` : null;
+  })();
 
-  const agentCard = useMemo(
-    () =>
-      selectedAgent ? (
-        <AgentHarnessCard
-          agent={selectedAgent}
-          task={selectedAgentTask}
-          parentName={selectedAgentParent?.name ?? null}
-          parentAgentId={selectedAgentParent?.id ?? null}
-          subAgents={selectedAgentSubs}
-          lastRun={selectedAgentRun}
-          runLabel={selectedAgentRun ? agoLabel(selectedAgentRun.finishedAt) : null}
-          headName={agentHeadName}
-          onClose={() => setSelectedAgentId(null)}
-          onTool={selectToolSlug}
-          onAgent={(id) => selectAgent(`emp:${id}`)}
-          onTask={selectedAgentTaskId ? () => selectTask(selectedAgentTaskId) : undefined}
-        />
-      ) : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedAgentId, selectedAgentRun],
-  );
+  const taskCard = selectedTask ? (
+    <SopTaskDetailCard
+      task={selectedTask}
+      assigneeName={selectedTaskWorkerNode?.label ?? selectedTask.assigneeId}
+      assigneeKindLabel={selectedTask.assigneeKind === 'person' ? 'human employee' : 'AI agent'}
+      assigneeColor={selectedTask.assigneeKind === 'person' ? 'var(--warn)' : 'var(--accent)'}
+      runtime={taskRuntime}
+      tools={toolChips(selectedTaskWorker)}
+      onClose={clearDetail}
+      onAssignee={selectedTaskWorker ? () => selectWorker(selectedTaskWorker) : undefined}
+      onTool={selectToolSlug}
+    />
+  ) : null;
 
-  const taskCard = useMemo(
-    () =>
-      selectedTask ? (
-        <SopTaskDetailCard
-          task={selectedTask}
-          assigneeName={selectedTaskWorkerNode?.label ?? selectedTask.assigneeId}
-          assigneeKindLabel={selectedTask.assigneeKind === 'person' ? 'human employee' : 'AI agent'}
-          assigneeColor={selectedTask.assigneeKind === 'person' ? 'var(--warn)' : 'var(--accent)'}
-          runtime={
-            selectedTask.assigneeKind === 'person'
-              ? 'human · judgment call'
-              : (() => {
-                  const a = agents.find((x) => x.id === selectedTask.assigneeId);
-                  return a ? `${a.instance} · ${a.model}` : null;
-                })()
-          }
-          tools={toolChips(selectedTaskWorker)}
-          onClose={clearDetail}
-          onAssignee={selectedTaskWorker ? () => selectWorker(selectedTaskWorker) : undefined}
-          onTool={selectToolSlug}
-        />
-      ) : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedTaskId, selectedTaskWorker],
-  );
-
-  const humanCard = useMemo(
-    () =>
-      selectedHuman ? (
-        <GraphHumanDetailCard
-          person={selectedHuman}
-          deptName={byId.get(`team:${selectedHuman.departmentId}`)?.label ?? selectedHuman.departmentId}
-          color="var(--warn)"
-          task={selectedHumanTask}
-          tools={toolChips(selectedHumanId)}
-          onClose={clearDetail}
-          onTask={selectedHumanTaskId ? () => selectTask(selectedHumanTaskId) : undefined}
-          onTool={selectToolSlug}
-        />
-      ) : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedHumanId, selectedHumanTaskId],
-  );
+  const humanCard = selectedHuman ? (
+    <GraphHumanDetailCard
+      person={selectedHuman}
+      deptName={byId.get(`team:${selectedHuman.departmentId}`)?.label ?? selectedHuman.departmentId}
+      color="var(--warn)"
+      task={selectedHumanTask}
+      tools={toolChips(selectedHumanId)}
+      onClose={clearDetail}
+      onTask={selectedHumanTaskId ? () => selectTask(selectedHumanTaskId) : undefined}
+      onTool={selectToolSlug}
+    />
+  ) : null;
 
   const selectedMemory = selectedMemoryId ? memory?.nodes.find((n) => n.id === selectedMemoryId) ?? null : null;
-  const memoryCard = useMemo(
-    () =>
-      selectedMemory ? (
-        <MemoryNoteCard note={selectedMemory} color={memColor(selectedMemory)} onClose={() => setSelectedMemoryId(null)} />
-      ) : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedMemoryId],
-  );
+  const memoryCard = selectedMemory ? (
+    <MemoryNoteCard
+      note={selectedMemory}
+      color={memColor(selectedMemory)}
+      onClose={() => setSelectedMemoryId(null)}
+    />
+  ) : null;
 
-  const toolCard = useMemo(
-    () => (toolWiki ? <ToolDetailCard wiki={toolWiki} onClose={() => setSelectedToolId(null)} /> : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selectedToolId],
-  );
-
-  // Clicking the middle Obsidian core opens the whole-brain overview on the
-  // left. A selected note (memoryCard) still wins; closing the brain
-  // card collapses the core back out.
-  const coreCard = useMemo(
-    () =>
-      coreExpanded ? (
-        <MemoryCoreCard memory={memory} color="var(--accent)" onClose={() => setCoreExpanded(false)} />
-      ) : null,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [coreExpanded, memory],
-  );
-
-  // The detail card is shared by two chromes: a docked sliver over the graph,
-  // and a wide LEFT column when expanded. Both render the same (memoized) body
-  // and the same top bar (back → directory, expand toggle, close).
-  const detailOpen = !!(agentCard || toolCard || headCard || boardCard || taskCard || humanCard || memoryCard || coreCard);
-  const detailBody = toolCard ?? agentCard ?? headCard ?? boardCard ?? taskCard ?? humanCard ?? memoryCard ?? coreCard;
-  const detailTopBar = (
-    <div className="flex shrink-0 items-center border-b border-os-border pr-1">
-      <button
-        onClick={clearDetail}
-        aria-label={`Back to the ${focusedTeam?.label ?? 'directory'}`}
-        className="pressable flex min-w-0 flex-1 items-center gap-1.5 px-3 py-2 text-left font-mono text-[10px] uppercase tracking-[0.14em] text-os-dim hover:text-os-text"
-      >
-        <ArrowLeft className="h-3 w-3 shrink-0" />
-        <span className="truncate">
-          Back · <span style={{ color: focusedTeam?.color ?? 'var(--text)' }}>{focusedTeam?.label ?? 'directory'}</span>
-        </span>
-      </button>
-      <button
-        onClick={() => setDetailExpanded((v) => !v)}
-        aria-label={detailExpanded ? 'Collapse the detail card' : 'Expand the detail card'}
-        title={detailExpanded ? 'Collapse' : 'Expand to a wider view'}
-        className="pressable flex h-7 w-7 shrink-0 items-center justify-center rounded-sm-t text-os-dim hover:text-os-accent"
-      >
-        {detailExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-      </button>
-      <button
-        onClick={clearDetail}
-        aria-label="Close and go back to the directory"
-        title="Close"
-        className="pressable flex h-7 w-7 shrink-0 items-center justify-center rounded-sm-t text-os-dim hover:text-os-err"
-      >
-        <X className="h-3.5 w-3.5" />
-      </button>
-    </div>
-  );
-
-  // (The Clients pillar used to auto-open its roster in the detail slot,
-  // which read as an unprompted pop-up and a bug. Cards now open
+  // (The Clients pillar used to auto-open its roster in the detail slot —
+  // the operator read the unprompted pop-up as a bug, 2026-07-12. Cards now open
   // only when a node is explicitly clicked, on every pillar equally.)
 
   // ── node dragging ───────────────────────────────────────────────────────────
@@ -1943,63 +1660,6 @@ export function KnowledgeGraph({
     const pt = new DOMPoint(clientX, clientY).matrixTransform(ctm.inverse());
     return { x: pt.x, y: pt.y };
   };
-  // Scroll-wheel zoom about the cursor. Attached manually (non-passive) so
-  // preventDefault can stop the page from scrolling under the graph.
-  useEffect(() => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const vb = svg.viewBox.baseVal;
-      const pt = svg.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
-      const ctm = svg.getScreenCTM();
-      const p = ctm ? pt.matrixTransform(ctm.inverse()) : { x: CX, y: CY };
-      const f = Math.min(2, Math.max(0.5, Math.exp(e.deltaY * 0.0012)));
-      const w = Math.min(W * 3, Math.max(W * 0.12, vb.width * f));
-      const k = w / vb.width;
-      userViewRef.current = {
-        x: p.x - (p.x - vb.x) * k,
-        y: p.y - (p.y - vb.y) * k,
-        w,
-        h: vb.height * k,
-      };
-    };
-    svg.addEventListener('wheel', onWheel, { passive: false });
-    return () => svg.removeEventListener('wheel', onWheel);
-  }, []);
-
-  // Dragging the canvas background pans the manual camera; node drags stop
-  // propagation before these fire, so the two never fight.
-  const onCanvasPointerDown = (e: React.PointerEvent<SVGSVGElement>) => {
-    const svg = svgRef.current;
-    if (!svg || e.button !== 0) return;
-    const vb = svg.viewBox.baseVal;
-    const ctm = svg.getScreenCTM();
-    panRef.current = { px: e.clientX, py: e.clientY, x: vb.x, y: vb.y, k: ctm ? 1 / ctm.a : 1, moved: false };
-    try {
-      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    } catch {
-      /* capture is best-effort */
-    }
-  };
-  const onCanvasPointerMove = (e: React.PointerEvent<SVGSVGElement>) => {
-    const p = panRef.current;
-    const svg = svgRef.current;
-    if (!p || !svg) return;
-    const dx = e.clientX - p.px;
-    const dy = e.clientY - p.py;
-    if (!p.moved && Math.hypot(dx, dy) < 3) return;
-    p.moved = true;
-    const vb = svg.viewBox.baseVal;
-    userViewRef.current = { x: p.x - dx * p.k, y: p.y - dy * p.k, w: vb.width, h: vb.height };
-  };
-  const onCanvasPointerUp = () => {
-    if (panRef.current?.moved) panSuppressRef.current = true;
-    panRef.current = null;
-  };
-
   const onNodePointerDown = (e: React.PointerEvent, id: string) => {
     e.stopPropagation();
     try {
@@ -2053,21 +1713,25 @@ export function KnowledgeGraph({
       <svg
         ref={svgRef}
         viewBox={`0 0 ${W} ${H}`}
-        className="h-full w-full"
+        className="h-full w-full overflow-visible"
         role="img"
         aria-label="Operating knowledge graph"
-        onPointerDown={onCanvasPointerDown}
-        onPointerMove={onCanvasPointerMove}
-        onPointerUp={onCanvasPointerUp}
-        onClick={() => {
-          // a drag that actually panned must not read as a background click
-          if (panSuppressRef.current) {
-            panSuppressRef.current = false;
-            return;
-          }
-          clearAll();
-        }}
+        onClick={clearAll}
       >
+        <defs>
+          {/* shared glass-node gradients: dark violet-tinted disc + a
+              top-left light so every node reads as a small glass chip */}
+          <radialGradient id="kg-node-glass" cx="0.34" cy="0.28" r="1.05">
+            <stop offset="0%" stopColor="var(--kg-bg-1)" stopOpacity="0.9" />
+            <stop offset="55%" stopColor="var(--kg-bg-2)" stopOpacity="0.92" />
+            <stop offset="100%" stopColor="var(--kg-bg-3)" stopOpacity="0.96" />
+          </radialGradient>
+          <radialGradient id="kg-node-light" cx="0.32" cy="0.24" r="0.72">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity="0.28" />
+            <stop offset="45%" stopColor="#ffffff" stopOpacity="0.06" />
+            <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
+          </radialGradient>
+        </defs>
         {/* orbital rings — faint, slowly-rotating backdrop (memoized; static) */}
         {orbitalRings}
 
@@ -2105,33 +1769,16 @@ export function KnowledgeGraph({
             const tint = team?.color ?? EDGE_COLOR[l.kind] ?? 'var(--dim)';
             const incident = hoverId !== null && (s.id === hoverId || t.id === hoverId);
             const onChain = !lit || (lit.has(s.id) && lit.has(t.id));
-            const arc = edgeArc(s, t);
             return (
-              <g key={i}>
-                <path
-                  d={arc}
-                  fill="none"
-                  stroke={tint}
-                  strokeWidth={incident ? 1.6 : onChain && lit ? 1.2 : 0.9}
-                  strokeLinecap="round"
-                  opacity={lit ? (incident ? 0.6 : onChain ? 0.35 : 0.05) : 0.14}
-                />
-                {/* info neurons: a pulse travelling each department's main line
-                    (pillar) and a smaller one branching out to each SOP (sop),
-                    so the collapsed web reads as alive */}
-                {(l.kind === 'pillar' || l.kind === 'sop') && !lit && (
-                  <path
-                    d={arc}
-                    fill="none"
-                    stroke={tint}
-                    strokeWidth={l.kind === 'pillar' ? 1.7 : 1}
-                    strokeLinecap="round"
-                    pathLength={1}
-                    className={l.kind === 'pillar' ? 'kg-synapse' : 'kg-synapse-sm'}
-                    style={{ ['--kg-syn-delay' as string]: `${(i % 7) * -0.7}s` }}
-                  />
-                )}
-              </g>
+              <path
+                key={i}
+                d={edgeArc(s, t)}
+                fill="none"
+                stroke={tint}
+                strokeWidth={incident ? 1.6 : onChain && lit ? 1.2 : 0.9}
+                strokeLinecap="round"
+                opacity={lit ? (incident ? 0.6 : onChain ? 0.35 : 0.04) : 0.08}
+              />
             );
           })}
           </g>
@@ -2164,7 +1811,7 @@ export function KnowledgeGraph({
                 : b.depth === 2 ? 'var(--accent)'
                 : 'var(--text)';
               return (
-                <path key={i} d={branchPath(s, t)} fill="none" stroke={stroke} strokeWidth={branchWidth(b.depth)} strokeLinecap="round" strokeDasharray={b.dashed ? '3 6' : undefined} />
+                <path key={i} d={branchPath(s, t)} fill="none" stroke={stroke} strokeWidth={branchWidth(b.depth)} strokeLinecap="round" />
               );
             })}
           </g>
@@ -2241,7 +1888,7 @@ export function KnowledgeGraph({
           </g>
         )}
 
-        {/* the flank departments ride the rim ALREADY EXPANDED: their
+        {/* the flank departments ride the rim ALREADY EXPANDED : their
             limbs draw faint from the live gliding nodes, so each tilted tree
             reads as a whole department mounted on the huge wheel */}
         {focusTree && flankTeams && (
@@ -2278,8 +1925,8 @@ export function KnowledgeGraph({
               ? !lit.has(n.id)
               : false;
           const inFocus = focusSet?.has(n.id) ?? false;
-          const selected = selectedAgentId === n.id || selectedToolId === n.id || selectedTaskId === n.id || selectedHumanId === n.id || selectedBoardId === n.id;
-          const showLabel = n.kind === 'self' || n.kind === 'team' || n.kind === 'board' || inFocus || (hoverId ? (lit?.has(n.id) ?? false) : false);
+          const selected = selectedAgentId === n.id || selectedToolId === n.id || selectedTaskId === n.id || selectedHumanId === n.id;
+          const showLabel = n.kind === 'self' || n.kind === 'team' || inFocus || (hoverId ? (lit?.has(n.id) ?? false) : false);
           const Icon = cat.Icon;
           // tier radius + a connection-count bump for workers and tools, so
           // heavily-wired nodes read heavier at a glance
@@ -2287,9 +1934,9 @@ export function KnowledgeGraph({
           const r = cat.r + (isWorker(n.kind) || n.kind === 'tool' ? Math.min(2.5, degree * 0.3) : 0);
           // hierarchy brightness at rest; dimmed nodes drop to 0.15 on hover,
           // in focus, ONLY the flanking pillar gateways stay visible beside
-          // the tree: nothing behind the pillar currently in view —
+          // the tree  —
           // every other unfocused node rides the carousel fully hidden
-          // flanks show a PORTION of their department: the gateway
+          // flanks show a PORTION of their department : the gateway
           // reads at 0.6, its condensed cluster at a whisper — transparent so
           // it never overbears the stage; everything further is fully hidden
           const sectorTeam = n.kind === 'team' ? n.id : teamForFocus(n.id);
@@ -2308,9 +1955,9 @@ export function KnowledgeGraph({
                 : 0.15
             : TIER_OPACITY[n.kind];
 
-          // the operator rendered as their memory: the Obsidian constellation of real
+          // the operator rendered as his memory: the Notes constellation of real
           // brain-store notes, folder-tinted, wikilinks as hairlines. Collapsed
-          // it's one operator-sized click target; expanded (camera dived in) the
+          // it's one the operator-sized click target; expanded (camera dived in) the
           // individual notes become readable and clickable.
           if (n.kind === 'self' && memoryOn) {
             return (
@@ -2340,7 +1987,7 @@ export function KnowledgeGraph({
                   onNodeClick(n);
                 }}
               >
-                <title>Obsidian: all of the operator&apos;s markdown, click to open the graph</title>
+                <title>Notes: all of {OPERATOR_NAME}&apos;s markdown, click to open the graph</title>
                 {memoryCoreInner}
                 {/* synapse sparks — positions written from the camera rAF */}
                 <g
@@ -2418,7 +2065,7 @@ export function KnowledgeGraph({
                         </g>
                       );
                     })}
-                    {/* Obsidian hover: the pointed-at note lights its direct
+                    {/* Notes hover: the pointed-at note lights its direct
                         neighbors and the links to them */}
                     {memHoverId && (() => {
                       const hp = memLayout.get(memHoverId);
@@ -2497,53 +2144,32 @@ export function KnowledgeGraph({
               {/* selection echoes the vault's orange — one visual language
                   between the core and the outlined outer nodes */}
               {selected && <circle r={r + 3.5} fill="none" stroke={HUB_COLOR} strokeWidth={1} opacity={0.4} />}
-              {/* board seats keep a whisper hairline — the fat white ring read
-                  as clutter */}
-              <circle
-                r={r}
-                fill={n.kind === 'self' ? color : 'var(--surface)'}
-                stroke={color}
-                strokeOpacity={n.kind === 'board' ? 0.55 : 1}
-                strokeWidth={n.kind === 'board' ? (selected || hoverId === n.id ? 1.4 : 0.6) : selected || hoverId === n.id ? 2.5 : 1.5}
-              />
+              {/* glass chip (2026-09-01): soft halo → dark glass disc → colour
+                  tint → top-light — instead of the old flat surface circle */}
+              {(selected || hoverId === n.id) && <circle r={r + 5} fill={color} opacity={0.16} style={{ filter: 'blur(3px)' }} />}
+              {/* "the icons are too reminiscent of that
+                  with those big outlines" — the permanent colored ring is
+                  gone. The disc is neutral glass with a hairline; the colour
+                  lives in the icon and a soft inner tint, and the ring only
+                  appears on hover/selection. Layout untouched. */}
+              <circle r={r} fill={n.kind === 'self' ? color : 'url(#kg-node-glass)'} stroke="rgba(255,255,255,0.14)" strokeWidth={1} />
+              {n.kind !== 'self' && <circle r={r} fill={color} opacity={n.kind === 'team' ? 0.2 : 0.11} />}
+              {n.kind !== 'self' && <circle r={r} fill="url(#kg-node-light)" />}
+              {(selected || hoverId === n.id) && n.kind !== 'self' && (
+                <circle r={r + 1.2} fill="none" stroke={color} strokeWidth={1.3} opacity={0.85} />
+              )}
               <g style={{ color: n.kind === 'self' ? 'var(--bg)' : color }}>
-                <Icon x={-r * 0.62} y={-r * 0.62} width={r * 1.24} height={r * 1.24} strokeWidth={2} />
+                <Icon x={-r * 0.58} y={-r * 0.58} width={r * 1.16} height={r * 1.16} strokeWidth={1.5} />
               </g>
-              {showLabel && n.kind === 'board' ? (() => {
-                // board seats: the label swings radially OUTWARD from the core
-                // so no seat's name collides with the constellation or with a
-                // neighbouring seat — the ring stays readable at any count
-                const vx = n.x - CX;
-                const vy = n.y - CY;
-                const m = Math.hypot(vx, vy) || 1;
-                const ux = vx / m;
-                const uy = vy / m;
-                // Left-half seats read sideways (the text runs outward-left,
-                // away from everything); right and diagonal seats stack
-                // above/below so a long name never runs into a pillar label.
-                const side = ux < -0.45 || ux > 0.85;
-                return (
-                  <text
-                    x={ux * (r + 5) + (side ? Math.sign(ux) * 3 : 0)}
-                    y={uy * (r + 5) + (side ? 3 : uy >= 0 ? 11 : -5)}
-                    textAnchor={side ? (ux > 0 ? 'start' : 'end') : 'middle'}
-                    fontFamily="var(--font-mono)"
-                    fontWeight={600}
-                    fill="var(--text-2)"
-                    style={fixedLabel(9)}
-                  >
-                    {shortLabel(n)}
-                  </text>
-                );
-              })() : showLabel && (
+              {showLabel && (
                 <text
                   x={0}
                   y={r + 11 + (labelDy.get(n.id) ?? 0)}
                   textAnchor="middle"
-                  fontFamily="var(--font-mono)"
-                  fontWeight={n.kind === 'self' || n.kind === 'team' ? 600 : 400}
+                  fontFamily={n.kind === 'task' ? 'var(--font-mono)' : 'var(--font-sans)'}
+                  fontWeight={n.kind === 'self' || n.kind === 'team' ? 500 : 400}
                   fill={n.kind === 'team' ? color : 'var(--text-2)'}
-                  style={fixedLabel(n.kind === 'self' || n.kind === 'team' ? 10 : n.kind === 'task' ? 8.5 : 9)}
+                  style={fixedLabel(n.kind === 'self' || n.kind === 'team' ? 10.5 : n.kind === 'task' ? 8.5 : 9)}
                 >
                   {shortLabel(n)}
                 </text>
@@ -2559,14 +2185,12 @@ export function KnowledgeGraph({
     <style
       dangerouslySetInnerHTML={{
         __html: `
-@keyframes kg-drift { from { background-position: 0 0; } to { background-position: 44px 44px; } }
+/* Console 6 (2026-08-24): static dot field replaces the drifting graph-paper
+   grid — quieter backdrop, and no perpetual motion pretending to be live. */
 .kg-grid {
-  background-image:
-    linear-gradient(to right, var(--border-strong) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--border-strong) 1px, transparent 1px);
-  background-size: 44px 44px;
-  opacity: 0.4;
-  animation: kg-drift 26s linear infinite;
+  background-image: radial-gradient(var(--border-strong) 1px, transparent 1.4px);
+  background-size: 26px 26px;
+  opacity: 0.35;
 }
 
 /* Focused-tree growth + life */
@@ -2642,7 +2266,7 @@ export function KnowledgeGraph({
           currentTeamId={focusTeamId}
           currentDept={currentDept}
           toolWiki={toolWiki}
-          extraDetail={agentCard ?? headCard ?? boardCard ?? taskCard ?? humanCard ?? memoryCard ?? coreCard}
+          extraDetail={agentCard ?? taskCard ?? humanCard ?? memoryCard}
           coreOpen={coreExpanded}
           onCollapseCore={clearAll}
           searchSlot={vaultSearchInput}
@@ -2663,19 +2287,9 @@ export function KnowledgeGraph({
   return (
     <>
       {gridStyle}
-      <div className={`flex flex-col gap-3 lg:flex-row ${fill ? 'h-full' : ''}`}>
-        {/* the detail card pops on the LEFT: a wide column when
-            expanded, pushing the graph right; the directory stays on the right.
-            The graph is never covered, it just reflows narrower. */}
-        {detailOpen && detailExpanded && (
-          <aside className={`order-first flex h-[560px] w-full shrink-0 flex-col overflow-hidden rounded-lg-t border border-os-border-strong bg-os-bg/95 lg:w-[420px] ${fill ? 'lg:h-full' : 'lg:h-[680px]'}`}>
-            {detailTopBar}
-            <div className="min-h-0 flex-1 overflow-hidden">{detailBody}</div>
-          </aside>
-        )}
-        <div className={`relative min-w-0 flex-1 overflow-hidden rounded-panel border border-os-border bg-os-surface ${fill ? 'h-full min-h-[440px]' : 'h-[680px]'}`}>
+      <div className="flex flex-col gap-4 lg:flex-row">
+        <div className={gc('kg-graph-stage relative h-[680px] min-w-0 flex-1 overflow-hidden', 'glass-panel-violet relative h-[680px] min-w-0 flex-1 overflow-hidden')}>
           {graphInner}
-          {nodeCard}
 
           {/* fullscreen tab — top right (opens straight into the dept wheel) */}
           <button
@@ -2684,47 +2298,32 @@ export function KnowledgeGraph({
               setFullscreen(true);
             }}
             title="Open the department wheel"
-            className="pressable absolute right-3 top-3 z-20 flex items-center gap-1.5 rounded-sm-t border border-os-border-strong bg-os-bg/80 px-2 py-1 font-mono text-[10.5px] text-os-muted backdrop-blur hover:text-os-accent"
+            className={gc('g-btn g-btn-sm absolute right-3 top-3 z-20', 'glass-chip absolute right-3 top-3 z-20 flex items-center gap-2.5 px-3 py-1.5 text-[12px] text-os-muted transition-colors hover:text-os-text')}
           >
             <Maximize2 className="h-3.5 w-3.5" /> Fullscreen
           </button>
-
-          {/* department title — big, bold, WHITE, pinned top-center whenever a
-              department is focused, so it's always clear which one is on screen
-              for the demo. Never in the way: pointer-events-none, above the
-              tree, out of the top-left/right controls' lane. */}
-          {focusSet && !coreExpanded && (
-            <div className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2">
-              <span
-                className="text-[22px] font-bold uppercase leading-none tracking-[0.08em]"
-                style={{ color: '#ffffff', textShadow: '0 1px 8px rgba(0,0,0,0.75)' }}
-              >
-                {focusedTeam?.label}
-              </span>
-            </div>
-          )}
 
           {/* top-left navigation: ← Back to the home view whenever we've gone
               anywhere (a dept tree or inside the memory), plus the department
               switcher while a tree is focused. */}
           {(focusSet || coreExpanded) && (
-            <div className="absolute left-3 top-3 z-10 flex items-center gap-2">
+            <div className="absolute left-3 top-3 z-10 flex items-center gap-3">
               <button
                 onClick={clearAll}
                 aria-label="Back to the home view"
                 title="Back to the home view"
-                className="pressable flex items-center gap-1.5 rounded-sm-t border border-os-border-strong bg-os-bg/85 px-2 py-1.5 font-mono text-[10.5px] text-os-muted backdrop-blur hover:text-os-accent"
+                className={gc('g-btn g-btn-sm', 'glass-chip flex items-center gap-2.5 px-3 py-2 text-[12.5px] text-os-muted transition-colors hover:text-os-text')}
               >
                 <ArrowLeft className="h-3.5 w-3.5" /> Back
               </button>
               {vaultSearchInput}
               {focusSet && (
-                <div className="flex items-center gap-0.5 rounded-sm-t border border-os-border-strong bg-os-bg/85 px-1 py-1 backdrop-blur">
+                <div className={gc('kg-hud flex items-center gap-0.5 px-1.5 py-1', 'glass-chip flex items-center gap-0.5 px-1.5 py-1')}>
                   <button
                     onClick={() => stepDept(-1)}
                     aria-label="Previous department"
                     title="Previous department"
-                    className="pressable flex h-6 w-6 items-center justify-center rounded-sm-t text-os-dim hover:text-os-text"
+                    className={gc('g-btn g-btn-icon g-btn-sm', 'flex h-6 w-6 items-center justify-center rounded-sm-t text-os-dim transition-colors hover:text-os-text')}
                   >
                     <ChevronLeft className="h-3.5 w-3.5" />
                   </button>
@@ -2732,18 +2331,18 @@ export function KnowledgeGraph({
                     onClick={() => stepDept(1)}
                     aria-label="Next department"
                     title="Next department"
-                    className="pressable flex h-6 w-6 items-center justify-center rounded-sm-t text-os-dim hover:text-os-text"
+                    className={gc('g-btn g-btn-icon g-btn-sm', 'flex h-6 w-6 items-center justify-center rounded-sm-t text-os-dim transition-colors hover:text-os-text')}
                   >
                     <ChevronRight className="h-3.5 w-3.5" />
                   </button>
-                  <span className="max-w-[120px] truncate px-1.5 font-mono text-[11px] font-semibold" style={{ color: focusedTeam?.color ?? 'var(--text)' }}>
+                  <span className="max-w-[120px] truncate px-1.5 text-[12.5px] font-medium" style={{ color: focusedTeam?.color ?? 'var(--text)' }}>
                     {focusedTeam?.label}
                   </span>
                   <button
                     onClick={clearAll}
                     aria-label="Close focus"
                     title="Back to all"
-                    className="pressable flex h-6 w-6 items-center justify-center rounded-sm-t border-l border-os-border text-os-dim hover:text-os-err"
+                    className={gc('g-btn g-btn-icon g-btn-sm', 'flex h-6 w-6 items-center justify-center rounded-sm-t border-l border-os-border text-os-dim transition-colors hover:text-os-text')}
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
@@ -2752,59 +2351,69 @@ export function KnowledgeGraph({
             </div>
           )}
 
-          {/* department nav — pinned BOTTOM CENTER at all times while a pillar
-              is focused, so you can always turn the wheel no matter
-              what card is open. Bottom-center is clear water below the tree. */}
+          {/* side paddles: turn the wheel without reaching for the top bar —
+              vertically centered on the canvas edges while a pillar is focused;
+              the right paddle steps aside when the detail card is open */}
           {focusSet && !coreExpanded && (
-            <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-1 rounded-full border border-os-border-strong bg-os-bg/90 px-1.5 py-1.5 backdrop-blur">
+            <>
               <button
                 onClick={() => stepDept(-1)}
                 aria-label="Turn to the previous pillar"
                 title="Previous pillar (←)"
-                className="pressable flex h-9 w-9 items-center justify-center rounded-full text-os-muted hover:bg-os-surface hover:text-os-text"
+                className={gc('g-btn g-btn-icon kg-paddle', 'absolute left-2 top-1/2 z-10 flex h-28 w-11 -translate-y-1/2 items-center justify-center rounded-sm-t border border-transparent bg-transparent text-os-muted transition-colors hover:border-os-border hover:bg-os-bg/70 hover:text-os-text hover:backdrop-blur')}
+                data-side="left"
               >
-                <ChevronLeft className="h-5 w-5" />
+                <ChevronLeft className="h-6 w-6" />
               </button>
-              <span
-                className="min-w-[92px] px-1 text-center font-mono text-[11px] font-semibold leading-none"
-                style={{ color: focusedTeam?.color ?? 'var(--text)' }}
-              >
-                {focusedTeam?.label ?? 'Pillar'}
-              </span>
               <button
                 onClick={() => stepDept(1)}
                 aria-label="Turn to the next pillar"
                 title="Next pillar (→)"
-                className="pressable flex h-9 w-9 items-center justify-center rounded-full text-os-muted hover:bg-os-surface hover:text-os-text"
+                className={gc('g-btn g-btn-icon kg-paddle', 'absolute right-2 top-1/2 z-10 flex h-28 w-11 -translate-y-1/2 items-center justify-center rounded-sm-t border border-transparent bg-transparent text-os-muted transition-colors hover:border-os-border hover:bg-os-bg/70 hover:text-os-text hover:backdrop-blur')}
+                data-side="right"
               >
-                <ChevronRight className="h-5 w-5" />
+                <ChevronRight className="h-6 w-6" />
               </button>
-            </div>
+            </>
           )}
 
           {/* inline detail overlay — agent, tool, SOP task, human, memory note,
               or the Clients roster. The trail bar walks you back UP: node →
               pillar (this button) → home (the pillar bar's Back). */}
-          {detailOpen && !detailExpanded && (
-            <div className="kg-panel absolute left-3 top-[46px] z-10 flex h-[calc(100%-58px)] w-[320px] flex-col overflow-hidden rounded-lg-t border border-os-border-strong bg-os-bg/95 backdrop-blur">
-              {detailTopBar}
-              <div className="min-h-0 flex-1 overflow-hidden">{detailBody}</div>
+          {(agentCard || toolWiki || taskCard || humanCard || memoryCard) && (
+            <div className={gc('kg-panel kg-graph-panel absolute right-3 top-[46px] z-10 flex max-h-[calc(100%-58px)] w-[300px] flex-col overflow-hidden', 'kg-panel absolute right-3 top-[46px] z-10 flex max-h-[calc(100%-58px)] w-[300px] flex-col overflow-hidden rounded-[16px] border border-white/10 bg-[var(--kg-panel-bg)] backdrop-blur-md')}>
+              <button
+                onClick={clearDetail}
+                aria-label={`Back to the ${focusedTeam?.label ?? 'graph'} pillar`}
+                className={gc('g-btn g-btn-sm kg-panel-back', 'flex shrink-0 items-center gap-2.5 border-b border-os-border px-3 py-3 text-left text-[12px] text-os-dim transition-colors hover:text-os-text')}
+              >
+                <ArrowLeft className="h-3 w-3 shrink-0" />
+                <span className="truncate">
+                  Back · <span style={{ color: focusedTeam?.color ?? 'var(--text)' }}>{focusedTeam?.label ?? 'graph'}</span>
+                </span>
+              </button>
+              {toolWiki ? (
+                <ToolDetailCard wiki={toolWiki} onClose={() => setSelectedToolId(null)} />
+              ) : (
+                agentCard ?? taskCard ?? humanCard ?? memoryCard
+              )}
             </div>
           )}
         </div>
 
-        {/* the always-visible directory + legend — permanently on the RIGHT */}
-        <aside className={`flex max-h-[560px] shrink-0 flex-col gap-3.5 rounded-lg-t border border-os-border bg-os-surface p-3 lg:max-h-none ${fill ? 'lg:h-full' : 'lg:h-[680px]'} ${directoryCollapsed ? 'w-auto lg:w-16' : 'w-full lg:w-72'}`}>
+        {/* sidebar: legend + the always-visible directory (the physics editor
+            retired in its favor) — compact so the graph dominates */}
+        <aside className={`${gc('kg-graph-aside', 'glass-panel-violet')} flex shrink-0 flex-col gap-5 p-5 lg:h-[680px] lg:max-h-none ${directoryCollapsed ? 'max-h-[560px] w-auto lg:w-16' : 'h-[560px] w-full lg:w-72'}`}>
           <div className={directoryCollapsed ? 'hidden' : undefined}>
-            <div className="mb-1.5 flex items-baseline justify-between font-mono text-[9px] uppercase tracking-[0.16em] text-os-dim">
-              <span>Lens</span>
+            <div className="mb-1.5 flex items-baseline justify-between text-[12.5px] text-os-muted">
+              <span className="font-medium">Lens</span>
               {lensId && (
-                <button onClick={() => setLensId(null)} className="pressable text-os-dim hover:text-os-err">
-                  clear · {lensLit?.size ?? 0} lit
+                <button onClick={() => setLensId(null)} className={gc('g-btn g-btn-sm', 'text-[11.5px] text-os-dim transition-colors hover:text-os-text')}>
+                  Clear · {lensLit?.size ?? 0} lit
                 </button>
               )}
             </div>
-            <div className="mb-3 flex flex-col gap-1">
+            <div className="mb-4 flex flex-col gap-1">
               {(
                 [
                   ['Entity', ENTITY_LENSES],
@@ -2817,7 +2426,7 @@ export function KnowledgeGraph({
                   value={lenses.some((l) => l.id === lensId) ? lensId! : ''}
                   onChange={(e) => setLensId(e.target.value || null)}
                   aria-label={`${groupLabel} lens`}
-                  className="w-full rounded-sm-t border border-os-border bg-os-bg px-1.5 py-1 font-mono text-[10px] text-os-muted focus:border-os-border-strong focus:outline-none"
+                  className={gc('g-input kg-lens', 'w-full rounded-sm-t border border-os-border bg-os-surface2 px-1.5 py-1 text-[12px] text-os-muted focus:border-os-border-strong focus:outline-none')}
                 >
                   <option value="">{groupLabel} · all</option>
                   {lenses.map((l) => (
@@ -2829,24 +2438,33 @@ export function KnowledgeGraph({
               ))}
             </div>
 
-            <div className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.16em] text-os-dim">Legend</div>
+            <div className="mb-1.5 text-[12.5px] font-medium text-os-muted">Legend</div>
             <div className="flex flex-col gap-1">
               {LEGEND_KINDS.map((k) => {
                 const cat = CAT[k];
                 const count = graph.nodes.filter((n) => n.kind === k).length;
                 const Icon = cat.Icon;
                 return (
-                  <div key={k} className="flex items-center gap-2">
+                  <div key={k} className="flex items-center gap-3">
                     <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full border" style={{ borderColor: cat.color, color: cat.color }}>
                       <Icon className="h-3 w-3" strokeWidth={2} />
                     </span>
-                    <span className="flex-1 text-[11px] font-semibold">{cat.label}</span>
-                    <span className="font-mono text-[10px] text-os-dim">{count}</span>
+                    <span className="flex-1 text-[12.5px] font-medium">{cat.label}</span>
+                    <span className="font-mono text-[11.5px] text-os-dim">{count}</span>
                   </div>
                 );
               })}
             </div>
           </div>
+
+          <GraphBrainContext
+            label={
+              (() => {
+                const sid = selectedAgentId ?? selectedHumanId ?? selectedTaskId ?? selectedToolId;
+                return sid ? (byId.get(sid)?.label ?? null) : null;
+              })()
+            }
+          />
 
           <div className={`flex min-h-0 flex-1 flex-col ${directoryCollapsed ? '' : 'border-t border-os-border pt-3'}`}>
             <div className="min-h-0 flex-1">{directoryPanel}</div>

@@ -1,5 +1,5 @@
 /**
- * Deterministic geometry for the G-Brain knowledge-core visualization.
+ * Deterministic geometry for the Optimal Engine knowledge-core visualization.
  * Pure functions — the SVG component renders whatever these emit, so the
  * layout is testable without a DOM.
  */

@@ -1,5 +1,5 @@
 /**
- * Organic tree layout for the focused G-Brain department.
+ * Organic tree layout for the focused Optimal Engine department.
  *
  * When a department is selected we stop drawing it as concentric rings and grow
  * it as a real tree, from the bottom up: the department is the trunk's base,
@@ -18,13 +18,11 @@ export type Pt = { x: number; y: number };
 export type TreeNodePos = { x: number; y: number; depth: number };
 
 /** A skeleton branch (trunk → branch → leaf). Angle-capped at ≤45° from vertical. */
-export type TreeBranch = { source: string; target: string; depth: number; dashed?: boolean };
+export type TreeBranch = { source: string; target: string; depth: number };
 
 export type TreeLayoutInput = {
   selfId: string;
   teamId: string;
-  /** the department-head node — the junction the SOP limbs fan out from */
-  headId?: string;
   /** the focused team's SOP task nodes, in display order */
   taskIds: string[];
   /** taskId → the single worker (agent or person) who does it — monogamous */
@@ -57,24 +55,6 @@ const CONE = 1.0;
 const TOOL_SPACING = 90;
 // fraction of a pillar's half-slice the resting layout gives its agents/tools
 const SECTOR_FILL = 0.84;
-// Closest two nodes in the same depth band may sit before their labels collide.
-const MIN_BAND_GAP = 48;
-
-/**
- * How far to LIFT alternating nodes when a band cannot spread any wider.
- *
- * The task fan is capped by the ≤45° cone, not by the canvas, so a dense
- * department runs out of horizontal room long before it runs out of width:
- * Sales went to 9 SOPs when Alex's real closer and two setters landed
- * and its limbs closed to 39px. Staggering every other limb
- * upward buys the diagonal distance back, and lifting (never dropping) means
- * the lean only ever gets gentler, so the 45° cap still holds.
- */
-export function bandLift(spacing: number): number {
-  const target = MIN_BAND_GAP + 1; // clear the bound rather than land exactly on it
-  if (!Number.isFinite(spacing) || spacing >= target) return 0;
-  return Math.sqrt(target ** 2 - spacing ** 2);
-}
 
 const round2 = (n: number): number => {
   const v = Math.round(n * 100) / 100;
@@ -125,7 +105,7 @@ export function branchWidth(depth: number): number {
 export type RestLayoutInput = {
   selfId: string;
   /** ordered pillars; tools must be deduped to one primary pillar each */
-  pillars: { teamId: string; headId?: string; taskIds: string[]; workerIds: string[]; toolIds: string[] }[];
+  pillars: { teamId: string; taskIds: string[]; workerIds: string[]; toolIds: string[] }[];
   /** radius per depth: [self, team, task, worker, tool]. Omit to derive from width/height. */
   ringR?: number[];
   cx: number;
@@ -143,9 +123,7 @@ export type RestLayoutResult = { positions: Map<string, Pt> };
 // the SOP-task ring slots between the teams and the workers — spaced so the
 // outer (tool) ring keeps label headroom on an 880×600 canvas. Scaling by the
 // smaller dimension keeps every ring on-canvas on any aspect ratio.
-// Alex: nudged the department ring out (90 → 105) for a touch
-// more clear water between the pillars and the center brain.
-const RING_FRAC = [0, 105 / 600, 152 / 600, 200 / 600, 248 / 600];
+const RING_FRAC = [0, 90 / 600, 146 / 600, 198 / 600, 248 / 600];
 
 /** Responsive ring radii [self, team, task, worker, tool] for a given canvas size. */
 export function responsiveRingR(width: number, height: number): number[] {
@@ -177,7 +155,10 @@ export function radialRestLayout(input: RestLayoutInput): RestLayoutResult {
   const n = Math.max(1, pillars.length);
   const weights = pillars.map((p) => Math.max(1, p.taskIds.length + p.workerIds.length + p.toolIds.length));
   const total = weights.reduce((s, w) => s + w, 0) || 1;
-  const spans = weights.map((w) => (w / total) * Math.PI * 2);
+  // Spans blend density with EQUAL spacing (55% equal): the pillar ring reads
+  // as a circle top-down  while crowded sectors still get
+  // somewhat wider wedges for their branches. Equal weights stay exact.
+  const spans = weights.map((w) => (0.45 * (w / total) + 0.55 / n) * Math.PI * 2);
   const centersRaw: number[] = [];
   let cum = 0;
   for (let i = 0; i < n; i++) {
@@ -189,8 +170,6 @@ export function radialRestLayout(input: RestLayoutInput): RestLayoutResult {
   pillars.forEach((p, i) => {
     const center = centersRaw[i] + offset;
     positions.set(p.teamId, polar(ringR[1], center));
-    // the head sits dead-center of its wedge, midway between dept + task rings
-    if (p.headId) positions.set(p.headId, polar((ringR[1] + ringR[2]) / 2, center));
     const half = (spans[i] / 2) * SECTOR_FILL;
     const ring = (ids: string[], r: number) => {
       const k = ids.length;
@@ -208,7 +187,7 @@ export function radialRestLayout(input: RestLayoutInput): RestLayoutResult {
 }
 
 export function treeLayout(input: TreeLayoutInput): TreeLayoutResult {
-  const { selfId, teamId, headId, taskIds, workerByTask, toolsByWorker, width: W, height: H } = input;
+  const { selfId, teamId, taskIds, workerByTask, toolsByWorker, width: W, height: H } = input;
   const margin = input.margin ?? 70;
   const cx = W / 2;
   const yOf = (depth: number) => H * DEPTH_FRAC[depth];
@@ -223,16 +202,6 @@ export function treeLayout(input: TreeLayoutInput): TreeLayoutResult {
   positions.set(teamId, { x: cx, y: yOf(1), depth: 1 });
   branches.push({ source: selfId, target: teamId, depth: 1 });
 
-  // The department head rides the trunk between the department and its SOP
-  // fan — the dotted hop (dept ⇢ head), then every task limb grows from the
-  // head (Alex,: dept → head → SOPs, for every pillar).
-  if (headId) {
-    positions.set(headId, { x: cx, y: (yOf(1) + yOf(2)) / 2, depth: 1.5 });
-    branches.push({ source: teamId, target: headId, depth: 2, dashed: true });
-  }
-  const limbSource = headId ?? teamId;
-  const limbSourceY = headId ? (yOf(1) + yOf(2)) / 2 : yOf(1);
-
   // task limbs — fan above the department; the cone is capped by the rise so
   // the ≤45° lean always holds against this band's actual height gap.
   const teamY = yOf(1);
@@ -240,19 +209,14 @@ export function treeLayout(input: TreeLayoutInput): TreeLayoutResult {
   const workerY = yOf(3);
   const n = taskIds.length;
   const taskX = new Map<string, number>();
-  const taskLift = new Map<string, number>();
-  const dyLimb = limbSourceY - taskY; // > 0 (head→tasks when the junction exists)
-  const halfSpan = Math.min(W / 2 - margin, dyLimb * CONE);
-  const lift = bandLift(n <= 1 ? Infinity : (2 * halfSpan) / (n - 1));
   taskIds.forEach((id, i) => {
+    const dy = teamY - taskY; // > 0
+    const half = Math.min(W / 2 - margin, dy * CONE);
     const t = n <= 1 ? 0 : (i / (n - 1)) * 2 - 1; // -1 … 1
-    const x = clampX(cx + t * halfSpan);
-    // every other limb rides higher, so a band too dense to widen still reads
-    const up = i % 2 === 1 ? lift : 0;
+    const x = clampX(cx + t * half);
     taskX.set(id, x);
-    taskLift.set(id, up);
-    positions.set(id, { x, y: taskY - up, depth: 2 });
-    branches.push({ source: limbSource, target: id, depth: 2 });
+    positions.set(id, { x, y: taskY, depth: 2 });
+    branches.push({ source: teamId, target: id, depth: 2 });
   });
 
   // workers — monogamous, so each sits DIRECTLY above its one task: a clean
@@ -265,9 +229,7 @@ export function treeLayout(input: TreeLayoutInput): TreeLayoutResult {
     const x = taskX.get(taskId) ?? cx;
     workerX.set(w, x);
     workerIds.push(w);
-    // the worker carries its task's lift, so the hop stays vertical and the
-    // worker band inherits the same de-crowding
-    positions.set(w, { x, y: workerY - (taskLift.get(taskId) ?? 0), depth: 3 });
+    positions.set(w, { x, y: workerY, depth: 3 });
     branches.push({ source: taskId, target: w, depth: 3 });
   }
 
@@ -312,7 +274,7 @@ export function treeLayout(input: TreeLayoutInput): TreeLayoutResult {
 export type FocusWheel = { hub: Pt; scale: number; stage: number; squeeze: number };
 
 /**
- * The wheel you turn INTO: while a pillar is focused the
+ * The wheel you turn INTO : while a pillar is focused the
  * background wheel is not a diagram floating mid-canvas — it becomes a huge
  * apparatus whose hub sinks BELOW the bottom edge, enlarged so its pillar ring
  * passes exactly through the focused tree's team band. The focused sector
@@ -324,7 +286,7 @@ export type FocusWheel = { hub: Pt; scale: number; stage: number; squeeze: numbe
  * rigid wheel the neighbors would hang ~60° down the rim (below the canvas),
  * so a step read as "rising from the bottom". Squeezed, the neighbors hold at
  * the canvas SIDES and a turn sweeps laterally along the top arc — the motion
- * Alex asked for: from left and right, not from below.
+ * the operator asked for: from left and right, not from below.
  */
 export function focusWheel(width: number, height: number, ringR: number[]): FocusWheel {
   const hub = { x: width / 2, y: height * 1.3 };
@@ -363,7 +325,7 @@ export function cyclicDeltaF(from: number, to: number, n: number): number {
 }
 
 /**
- * The visible top of the wheel: pillars ride the RIM of
+ * The visible top of the wheel : pillars ride the RIM of
  * a huge wheel whose apex is the stage (the focused tree's team band). Offset
  * is in sectors — 0 at the apex, ±1 at the canvas edges a touch below it,
  * beyond that the rim has left the canvas. Feeding a smoothly-eased float

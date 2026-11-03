@@ -3,19 +3,25 @@
  * enter at the rim in one of seven acquisition segments (where they actually
  * came from) and travel inward ring by ring until the center — the purchase.
  *
- * Attribution is honest and layered: a touch that arrives with its own
- * `acquisition` stamp (Trakyo attributed the first touch structurally —
- * source type + source name) is trusted outright; everything else falls to
- * keyword classification over the entry touch, with `word_of_mouth` as the
- * explicit catch-all for what nothing tracked.
+ * Attribution is honest: keyword classification over the entry touch, with
+ * `word_of_mouth` as the explicit catch-all for what nothing tracked. Trakyo
+ * UTM links (ManyChat sends, YouTube titles) and the GHL `source` field feed
+ * the same labels, so live attribution sharpens as those land — no schema
+ * change needed.
  */
 import { funnelSpaceModel, type FunnelSpaceNode } from '@/lib/funnel';
-import type { FunnelAcquisition, FunnelJourney, FunnelTouch } from '@/lib/schemas';
+import type { FunnelJourney, FunnelTouch } from '@/lib/schemas';
 
 /** Journeys and space nodes both qualify — classification reads touches only. */
 type HasTouches = { touches: FunnelTouch[] };
 
-export type { FunnelAcquisition };
+export type FunnelAcquisition =
+  | 'instagram'
+  | 'youtube'
+  | 'newsletter'
+  | 'x_linkedin'
+  | 'form'
+  | 'word_of_mouth';
 
 /** The rim segments, in render order around the circle. X and LinkedIn share
  * one wedge (the operator condensed them — both are his text-platform funnels). */
@@ -44,29 +50,18 @@ const MATCHERS: { id: FunnelAcquisition; re: RegExp }[] = [
   { id: 'newsletter', re: /newsletter|beehiiv/i },
   { id: 'x_linkedin', re: /twitter|\bx thread|\bx post|\bx dm|\bon x\b|linkedin/i },
   { id: 'word_of_mouth', re: /referr|word of mouth|recommend/i },
-  { id: 'form', re: /\bform\b|application|typeform|survey|landing page|opt.?in|waitlist/i },
+  { id: 'form', re: /\bform\b|application|typeform|survey|landing page|opt.?in/i },
 ];
 
-/** The bare keyword pass — exported so Trakyo's source names run through the
- * exact same taxonomy. Null when nothing matches (callers own the fallback). */
-export function matchAcquisition(text: string): FunnelAcquisition | null {
-  for (const m of MATCHERS) if (m.re.test(text)) return m.id;
-  return null;
-}
-
 /**
- * Which rim segment a journey enters through. A touch stamped with its own
- * `acquisition` (Trakyo knew the source structurally) is trusted outright;
- * otherwise classify from the entry touch (label + channel). Unattributed
- * stays word_of_mouth: the honest bucket for "we didn't track this", exactly
- * the operator's framing of referrals.
+ * Which rim segment a journey enters through — classified from its entry
+ * touch (label + channel). Unattributed stays word_of_mouth: the honest
+ * bucket for "we didn't track this", exactly the operator's framing of referrals.
  */
 export function acquisitionFor(j: HasTouches): FunnelAcquisition {
   const entry = j.touches[0];
   if (!entry) return 'word_of_mouth';
-  if (entry.acquisition) return entry.acquisition;
-  const matched = matchAcquisition(entry.label);
-  if (matched) return matched;
+  for (const m of MATCHERS) if (m.re.test(entry.label)) return m.id;
   if (entry.channel === 'ads') return 'instagram'; // paid traffic = the IG/FB machine
   return 'word_of_mouth';
 }

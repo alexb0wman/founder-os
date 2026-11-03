@@ -15,12 +15,14 @@ export const COMMS_LANES: { id: CommsLane; label: string }[] = [
   { id: 'misc', label: 'Misc / Unknown' },
 ];
 
-// A personal-looking email inbox. Generic on purpose.
+// A personal-looking email inbox. Generic on purpose — never hardcode the operator's
+// real brand inboxes (they must not leak into the GladOS demo).
 const PERSONAL_INBOX_RE = /\b(personal|gmail|icloud|proton|outlook|private|me)\b/i;
 
-// Generic work signals shipped with the app. Deployment-specific brand
-// keywords (company names, specific people, …) belong in the
-// COMMS_WORK_KEYWORDS env var, not in this list.
+// Generic work signals shipped with the app. the operator's real work brands
+// (Acme, Workshop, specific people, …) live in COMMS_WORK_KEYWORDS
+// in .env.local, NOT here — the committed default must stay brand-free so it is
+// safe for the public GladOS demo.
 export const DEFAULT_WORK_KEYWORDS = [
   'invoice',
   'contract',

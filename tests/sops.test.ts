@@ -1,20 +1,20 @@
 import { afterEach, describe, expect, test } from 'vitest';
-import { openDb, type FounderDb } from '@/lib/db';
+import { openDb, type GladosDb } from '@/lib/db';
 import { seedDatabase } from '@/lib/seed';
 
-let db: FounderDb;
+let db: GladosDb;
 
 afterEach(() => {
   db?.close();
 });
 
-function seeded(): FounderDb {
+function seeded(): GladosDb {
   db = openDb(':memory:');
   seedDatabase(db);
   return db;
 }
 
-function withSalesDept(): FounderDb {
+function withSalesDept(): GladosDb {
   db = openDb(':memory:');
   db.departments.insert({
     id: 'dept-sales', name: 'Sales', slug: 'sales', tagline: 'Pipeline and deals.', color: '#fafafa', order: 1,
@@ -32,9 +32,9 @@ describe('people + sopTasks repos', () => {
   test('round-trips a person including their tools array', () => {
     const d = withSalesDept();
     const person = {
-      id: 'person-lee',
+      id: 'person-marco',
       departmentId: 'dept-sales',
-      name: 'Lee',
+      name: 'Marco',
       role: 'Head of Sales',
       tools: ['fathom', 'attio'],
     };
@@ -51,7 +51,7 @@ describe('people + sopTasks repos', () => {
       summary: 'Live sales calls from booked to closed-won.',
       steps: ['Review the lead in Attio', 'Run the discovery script', 'Log outcome + next step'],
       assigneeKind: 'person' as const,
-      assigneeId: 'person-lee',
+      assigneeId: 'person-marco',
     };
     d.sopTasks.insert(task);
     expect(d.sopTasks.all()).toEqual([task]);
@@ -74,15 +74,13 @@ describe('people + sopTasks repos', () => {
 });
 
 describe('seeded SOP graph data', () => {
-  test('seeding is idempotent for people and tasks', () => {
+  test('a fresh install ships no people or SOP tasks, and re-seeding keeps it that way', () => {
     const d = seeded();
-    const people = d.people.all().length;
-    const tasks = d.sopTasks.all().length;
-    expect(people).toBeGreaterThan(0);
-    expect(tasks).toBeGreaterThan(0);
+    expect(d.people.all()).toEqual([]);
+    expect(d.sopTasks.all()).toEqual([]);
     seedDatabase(d);
-    expect(d.people.all().length).toBe(people);
-    expect(d.sopTasks.all().length).toBe(tasks);
+    expect(d.people.all()).toEqual([]);
+    expect(d.sopTasks.all()).toEqual([]);
   });
 
   test('every task assignee exists and belongs to the task department', () => {
@@ -106,10 +104,9 @@ describe('seeded SOP graph data', () => {
     }
   });
 
-  test('every agent has exactly one task', () => {
+  test('no SOP tasks ship, so no agent starts with an assignment', () => {
     const d = seeded();
-    const assigned = d.sopTasks.all().filter((t) => t.assigneeKind === 'agent').map((t) => t.assigneeId);
-    expect(assigned.sort()).toEqual(d.agents.all().map((a) => a.id).sort());
+    expect(d.sopTasks.all().filter((t) => t.assigneeKind === 'agent')).toEqual([]);
   });
 
   test('every person has exactly one task and at least one tool', () => {

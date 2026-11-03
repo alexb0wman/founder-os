@@ -1,8 +1,7 @@
 /**
- * Lenses over the operating knowledge graph: slice the
- * same 114 nodes three ways — by ENTITY TYPE, by BUSINESS FUNCTION (core vs
- * enabling, plus the two venture teams), and by ACTION (what a thing is
- * actually used for). Picking a lens lights the matching nodes and dims the
+ * Lenses over the operating knowledge graph: slice the same nodes three ways
+ * — by ENTITY TYPE, by BUSINESS FUNCTION (core vs enabling, plus any venture
+ * teams), and by ACTION (what a thing is actually used for). Picking a lens lights the matching nodes and dims the
  * rest. Pure data + matchers; the component supplies the node list and a
  * department resolver.
  */
@@ -33,22 +32,18 @@ export const ENTITY_LENSES: Lens[] = [
 export const FUNCTION_LENSES: Lens[] = [
   { id: 'fn-core', group: 'function', label: 'Core' },
   { id: 'fn-enabling', group: 'function', label: 'Enabling' },
-  { id: 'fn-vantage', group: 'function', label: 'Vantage team' },
-  { id: 'fn-launchpad-cohort', group: 'function', label: 'Launchpad Cohort team' },
 ];
 
 export const ACTION_LENSES: Lens[] = [
-  { id: 'act-ad-creation', group: 'action', label: 'Ad creation' },
-  { id: 'act-lead-generation', group: 'action', label: 'Lead generation' },
-  { id: 'act-content-repurposing', group: 'action', label: 'Content repurposing' },
-  { id: 'act-content-ideation', group: 'action', label: 'Content ideation' },
-  { id: 'act-content-scripts', group: 'action', label: 'Content script creation' },
-  { id: 'act-social-sentiment', group: 'action', label: 'Social media sentiment analysis' },
-  { id: 'act-social-scheduler', group: 'action', label: 'Social posting & scheduler' },
-  { id: 'act-ai-visuals', group: 'action', label: 'AI-generated visual assets' },
-  { id: 'act-competitor-intel', group: 'action', label: 'Competitor ad intelligence' },
-  { id: 'act-icp-simulation', group: 'action', label: 'ICP identification & simulation' },
-  { id: 'act-channel-budget', group: 'action', label: 'Channel & budget allocation' },
+  { id: 'act-deal-triage', group: 'action', label: 'Deal triage' },
+  { id: 'act-deal-drafting', group: 'action', label: 'Deal drafting' },
+  { id: 'act-sending', group: 'action', label: 'Verified sending' },
+  { id: 'act-deal-alerts', group: 'action', label: 'Deal alerts' },
+  { id: 'act-pipeline', group: 'action', label: 'Pipeline tracking' },
+  { id: 'act-briefings', group: 'action', label: 'Briefings' },
+  { id: 'act-retrieval', group: 'action', label: 'Knowledge retrieval' },
+  { id: 'act-comms-feed', group: 'action', label: 'Unified comms feed' },
+  { id: 'act-infra-watch', group: 'action', label: 'Infra watch' },
 ];
 
 export const ALL_LENSES: Lens[] = [...ENTITY_LENSES, ...FUNCTION_LENSES, ...ACTION_LENSES];
@@ -57,25 +52,22 @@ export const ALL_LENSES: Lens[] = [...ENTITY_LENSES, ...FUNCTION_LENSES, ...ACTI
 const CORE_DEPTS = new Set(['team:dept-sales', 'team:dept-marketing-growth', 'team:dept-clients']);
 const ENABLING_DEPTS = new Set(['team:dept-tech', 'team:dept-finance', 'team:dept-comms']);
 
-/** Venture team rosters — seeded agent ids (graph nodes are `emp:<id>`). */
-const VENTURE_TEAMS: Record<string, string[]> = {
-  'fn-vantage': ['vantage-sales', 'vantage-paykit', 'paykit-sales'],
-  'fn-launchpad-cohort': ['launchpad-cohort-sales'],
-};
+/** Venture team rosters — agent ids per venture lens (graph nodes are `emp:<id>`).
+ *  Empty on a fresh install; add `'fn-<venture>': [agentIds]` and a matching
+ *  FUNCTION_LENSES entry to light a venture's crew. */
+const VENTURE_TEAMS: Record<string, string[]> = {};
 
 /** What each action actually runs on — seeded agent ids, honest best-fit. */
 const ACTION_AGENTS: Record<string, string[]> = {
-  'act-ad-creation': ['adsmith-creative', 'renderly-creative', 'reelkit-editor'],
-  'act-lead-generation': ['sales-agent', 'launchpad-cohort-sales', 'dmflow-mcp', 'vantage-sales'],
-  'act-content-repurposing': ['reelkit-editor', 'postly-publisher'],
-  'act-content-ideation': ['social-agent', 'data-agent'],
-  'act-content-scripts': ['social-agent', 'adsmith-creative'],
-  'act-social-sentiment': ['social-agent', 'data-agent'],
-  'act-social-scheduler': ['postly-publisher', 'social-agent', 'dmflow-mcp'],
-  'act-ai-visuals': ['renderly-creative', 'adsmith-creative'],
-  'act-competitor-intel': ['data-agent', 'adsmith-creative'],
-  'act-icp-simulation': ['data-agent', 'sales-calls-data', 'crm-pulse'],
-  'act-channel-budget': ['data-agent', 'payments-pulse'],
+  'act-deal-triage': ['draft-approval-bot', 'inbound-watcher'],
+  'act-deal-drafting': ['brand-deal-drafter', 'deal-scanner'],
+  'act-sending': ['gsend-sender'],
+  'act-deal-alerts': ['deal-alerts'],
+  'act-pipeline': ['sales-agent', 'crm-pulse'],
+  'act-briefings': ['daily-briefing', 'team-briefing'],
+  'act-retrieval': ['data-agent', 'markdown-auditor', 'vector-auditor'],
+  'act-comms-feed': ['comms-agent', 'gmail-worker', 'whatsapp-worker', 'slack-worker'],
+  'act-infra-watch': ['stack-monitor', 'automation-jobs', 'conductor'],
 };
 
 const idSet = (ids: string[]) => new Set(ids.map((id) => `emp:${id}`));
@@ -83,7 +75,7 @@ const idSet = (ids: string[]) => new Set(ids.map((id) => `emp:${id}`));
 /**
  * The node ids a lens lights. Unknown lens → empty set. Workflows and
  * projects are not modeled as graph entities yet — their lenses honestly
- * return empty until those tables exist (demo-first, real-ready).
+ * return empty until those tables exist (larp-first, real-ready).
  */
 export function lensNodeSet(lensId: string, ctx: LensContext): Set<string> {
   const out = new Set<string>();
@@ -107,7 +99,7 @@ export function lensNodeSet(lensId: string, ctx: LensContext): Set<string> {
       byKind('team');
       break;
     case 'ent-teams': {
-      const members = idSet([...VENTURE_TEAMS['fn-vantage'], ...VENTURE_TEAMS['fn-launchpad-cohort']]);
+      const members = idSet(Object.values(VENTURE_TEAMS).flat());
       for (const n of ctx.nodes) if (members.has(n.id)) out.add(n.id);
       break;
     }
@@ -123,14 +115,8 @@ export function lensNodeSet(lensId: string, ctx: LensContext): Set<string> {
       }
       break;
     }
-    case 'fn-vantage':
-    case 'fn-launchpad-cohort': {
-      const members = idSet(VENTURE_TEAMS[lensId]);
-      for (const n of ctx.nodes) if (members.has(n.id)) out.add(n.id);
-      break;
-    }
     default: {
-      const agents = ACTION_AGENTS[lensId];
+      const agents = ACTION_AGENTS[lensId] ?? VENTURE_TEAMS[lensId];
       if (!agents) break;
       const members = idSet(agents);
       for (const n of ctx.nodes) if (members.has(n.id)) out.add(n.id);
